@@ -207,7 +207,6 @@ app.post('/api/return', async (req, res) => {
             const existingCNs = await qoyodClient.get('/credit_notes');
             const allCNs = existingCNs.data.credit_notes || [];
             if (allCNs.length > 0) {
-                // حساب الرقم التسلسلي التالي بناءً على عدد الإشعارات الموجودة
                 const crnNumbers = allCNs
                     .map(cn => {
                         const match = (cn.reference || '').match(/^CRN(\d+)-/);
@@ -217,7 +216,6 @@ app.post('/api/return', async (req, res) => {
                 if (crnNumbers.length > 0) {
                     crnSequence = Math.max(...crnNumbers) + 1;
                 } else {
-                    // إذا لم تكن هناك إشعارات بصيغة CRN، نبدأ من عدد الإشعارات + 1
                     crnSequence = allCNs.length + 1;
                 }
             }
@@ -254,36 +252,23 @@ app.post('/api/return', async (req, res) => {
         console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // ===== إرجاع أموال: إنشاء سند صرف (Receipt) ثم تخصيصه لإشعار الدائن =====
+            // ===== إرجاع أموال: credit_note_payments =====
+            // الـ Endpoint الصحيح: POST /credit_note_payments
+            // يُرجع المبلغ نقداً للعميل من الحساب المحدد
             try {
-                // الخطوة 1: إنشاء سند صرف (Receipt) بنوع paid
-                const receiptRes = await qoyodClient.post('/receipts', {
-                    receipt: {
-                        reference: `REFUND-${uniqueRef}`,
-                        contact_id: inv.contact_id,
+                const refundRes = await qoyodClient.post('/credit_note_payments', {
+                    credit_note_payment: {
+                        credit_note_id: String(cnId),
                         account_id: String(accountId),
                         amount: String(cnTotal),
-                        date: todayDate,
-                        kind: "paid",
-                        description: `إرجاع أموال - ${uniqueRef}`
+                        date: todayDate
                     }
                 });
-                const receipt = receiptRes.data.receipt;
-                console.log(`Receipt Created: ID=${receipt.id}, Amount=${receipt.amount}`);
-
-                // الخطوة 2: تخصيص السند لإشعار الدائن
-                const allocRes = await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
-                    allocation: {
-                        allocatee_type: "CreditNote",
-                        allocatee_id: String(cnId),
-                        amount: String(cnTotal)
-                    }
-                });
-                console.log(`Allocation Done: Receipt ${receipt.id} -> CreditNote ${cnId}`, allocRes.data);
+                console.log(`Refund Done: CreditNote ${cnId} -> Account ${accountId}`, refundRes.data);
 
                 return res.json({ 
                     status: 'success', 
-                    message: `تم الإرجاع + استرداد نقدي | المرجع: ${uniqueRef} | سند الصرف: ${receipt.reference}` 
+                    message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` 
                 });
             } catch (refundError) {
                 console.error("Refund Error:", refundError.response?.data || refundError.message);
@@ -294,36 +279,21 @@ app.post('/api/return', async (req, res) => {
                 });
             }
         } else {
-            // ===== تخصيص: إنشاء سند قبض (Receipt received) ثم تخصيصه لإشعار الدائن =====
+            // ===== تخصيص: credit_notes/{id}/allocations =====
+            // الـ Endpoint الصحيح: POST /credit_notes/{cnId}/allocations
+            // يخصص إشعار الدائن للفاتورة فتصبح "Paid" أو ينقص مبلغها
             try {
-                // الخطوة 1: إنشاء سند قبض (Receipt) بنوع received
-                const receiptRes = await qoyodClient.post('/receipts', {
-                    receipt: {
-                        reference: `ALLOC-${uniqueRef}`,
-                        contact_id: inv.contact_id,
-                        account_id: String(accountId),
-                        amount: String(cnTotal),
-                        date: todayDate,
-                        kind: "received",
-                        description: `تخصيص إشعار دائن - ${uniqueRef}`
-                    }
-                });
-                const receipt = receiptRes.data.receipt;
-                console.log(`Receipt Created: ID=${receipt.id}, Amount=${receipt.amount}`);
-
-                // الخطوة 2: تخصيص السند لإشعار الدائن (وليس الفاتورة)
-                const allocRes = await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
+                const allocRes = await qoyodClient.post(`/credit_notes/${cnId}/allocations`, {
                     allocation: {
-                        allocatee_type: "CreditNote",
-                        allocatee_id: String(cnId),
+                        invoice_id: String(inv.id),
                         amount: String(cnTotal)
                     }
                 });
-                console.log(`Allocation Done: Receipt ${receipt.id} -> CreditNote ${cnId}`, allocRes.data);
+                console.log(`Allocation Done: CreditNote ${cnId} -> Invoice ${inv.id}`, allocRes.data);
 
                 return res.json({ 
                     status: 'success', 
-                    message: `تم الإرجاع + تخصيص إشعار الدائن | المرجع: ${uniqueRef}` 
+                    message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` 
                 });
             } catch (allocError) {
                 console.error("Allocation Error:", allocError.response?.data || allocError.message);
