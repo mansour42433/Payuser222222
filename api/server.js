@@ -138,20 +138,23 @@ app.post('/api/pay', async (req, res) => {
     }
 });
 
-// 4. الإرجاع
+// 4. الإرجاع (محدّث: تسمية CRN تسلسلي + إصلاح الوحدات)
 app.post('/api/return', async (req, res) => {
     const { ref, returnType, accountId } = req.body;
 
     try {
+        // أ) البحث عن الفاتورة
         const resSearch = await qoyodClient.get('/invoices', { params: { 'q[reference_eq]': ref } });
         if (!resSearch.data.invoices || resSearch.data.invoices.length === 0) {
             return res.json({ status: 'error', message: 'الفاتورة غير موجودة' });
         }
         const summaryInv = resSearch.data.invoices[0];
 
+        // ب) جلب التفاصيل الكاملة للفاتورة (تشمل line_items مع unit_type)
         const detailRes = await qoyodClient.get(`/invoices/${summaryInv.id}`);
         const inv = detailRes.data.invoice || summaryInv;
 
+        // ج) تحديد المستودع
         let targetInventoryId = null;
         if (inv.inventory_id) targetInventoryId = String(inv.inventory_id);
         else if (inv.location_id) targetInventoryId = String(inv.location_id);
@@ -163,27 +166,62 @@ app.post('/api/return', async (req, res) => {
             return res.json({ status: 'error', message: 'الفاتورة الأصلية لا تحتوي على مستودع (Inventory ID)' });
         }
 
-        const creditLineItems = (inv.line_items || []).map(item => ({
-            product_id: item.product_id,
-            description: item.description || "استرجاع",
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            discount_percent: item.discount_percent || "0.0",
-            tax_percent: item.tax_percent
-        }));
+        // د) بناء line_items مع الحفاظ على نفس الوحدة (unit_type) من الفاتورة الأصلية
+        const creditLineItems = (inv.line_items || []).map(item => {
+            const lineItem = {
+                product_id: item.product_id,
+                description: item.description || "استرجاع",
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                discount_percent: item.discount_percent || "0.0",
+                tax_percent: item.tax_percent
+            };
+            // إصلاح مشكلة الوحدات: نسخ unit_type من الفاتورة الأصلية
+            // هذا يمنع تحويل الوحدات (مثلاً من كرتون إلى حبة)
+            if (item.unit_type_id) {
+                lineItem.unit_type = String(item.unit_type_id);
+            } else if (item.unit_type) {
+                lineItem.unit_type = String(item.unit_type);
+            } else if (item.unit_id) {
+                lineItem.unit_type = String(item.unit_id);
+            }
+            return lineItem;
+        });
 
-        const uniqueRef = `RET-${inv.reference}-${Date.now().toString().slice(-4)}`;
+        // هـ) توليد رقم مرجعي بصيغة CRN+تسلسلي-رقم الفاتورة
+        let crnSequence = 1;
+        try {
+            const existingCNs = await qoyodClient.get('/credit_notes');
+            const allCNs = existingCNs.data.credit_notes || [];
+            // حساب الرقم التسلسلي التالي
+            const crnNumbers = allCNs
+                .map(cn => {
+                    const match = (cn.reference || '').match(/^CRN(\d+)-/);
+                    return match ? parseInt(match[1]) : 0;
+                })
+                .filter(n => n > 0);
+            if (crnNumbers.length > 0) {
+                crnSequence = Math.max(...crnNumbers) + 1;
+            }
+        } catch (e) {
+            // في حالة فشل جلب الإشعارات، نستخدم timestamp كبديل
+            crnSequence = Date.now().toString().slice(-4);
+        }
+
+        const uniqueRef = `CRN${crnSequence}-${inv.reference}`;
         
         const cnPayload = {
             credit_note: {
                 contact_id: inv.contact_id,
                 reference: uniqueRef,
-                issue_date: new Date().toISOString().split('T')[0],
+                issue_date: new Date(new Date().getTime() + (3 * 60 * 60 * 1000)).toISOString().split('T')[0],
                 status: "Approved",
                 inventory_id: targetInventoryId,
                 line_items: creditLineItems
             }
         };
+
+        console.log("Credit Note Payload:", JSON.stringify(cnPayload, null, 2));
 
         const resCN = await qoyodClient.post('/credit_notes', cnPayload);
         const creditNote = resCN.data.credit_note || resCN.data;
@@ -194,10 +232,10 @@ app.post('/api/return', async (req, res) => {
                     credit_note_id: creditNote.id,
                     account_id: accountId,
                     amount: creditNote.total_amount || creditNote.total,
-                    date: new Date().toISOString().split('T')[0]
+                    date: new Date(new Date().getTime() + (3 * 60 * 60 * 1000)).toISOString().split('T')[0]
                 }
             });
-            return res.json({ status: 'success', message: 'تم الإرجاع + استرداد نقدي' });
+            return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي | المرجع: ${uniqueRef}` });
         } else {
             await qoyodClient.post(`/credit_notes/${creditNote.id}/allocations`, {
                 allocation: {
@@ -205,7 +243,7 @@ app.post('/api/return', async (req, res) => {
                     amount: creditNote.total_amount || creditNote.total
                 }
             });
-            return res.json({ status: 'success', message: 'تم الإرجاع + تخصيص الرصيد' });
+            return res.json({ status: 'success', message: `تم الإرجاع + تخصيص الرصيد | المرجع: ${uniqueRef}` });
         }
 
     } catch (error) {
