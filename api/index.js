@@ -207,6 +207,7 @@ app.post('/api/return', async (req, res) => {
             const existingCNs = await qoyodClient.get('/credit_notes');
             const allCNs = existingCNs.data.credit_notes || [];
             if (allCNs.length > 0) {
+                // حساب الرقم التسلسلي التالي بناءً على عدد الإشعارات الموجودة
                 const crnNumbers = allCNs
                     .map(cn => {
                         const match = (cn.reference || '').match(/^CRN(\d+)-/);
@@ -216,6 +217,7 @@ app.post('/api/return', async (req, res) => {
                 if (crnNumbers.length > 0) {
                     crnSequence = Math.max(...crnNumbers) + 1;
                 } else {
+                    // إذا لم تكن هناك إشعارات بصيغة CRN، نبدأ من عدد الإشعارات + 1
                     crnSequence = allCNs.length + 1;
                 }
             }
@@ -252,9 +254,7 @@ app.post('/api/return', async (req, res) => {
         console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // ===== إرجاع أموال: credit_note_payments =====
-            // الـ Endpoint الصحيح: POST /credit_note_payments
-            // يُرجع المبلغ نقداً للعميل من الحساب المحدد
+            // ===== إرجاع أموال نقدي: POST /credit_note_payments =====
             try {
                 const refundRes = await qoyodClient.post('/credit_note_payments', {
                     credit_note_payment: {
@@ -271,7 +271,7 @@ app.post('/api/return', async (req, res) => {
                     message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` 
                 });
             } catch (refundError) {
-                console.error("Refund Error:", refundError.response?.data || refundError.message);
+                console.error("Refund Error:", JSON.stringify(refundError.response?.data || refundError.message));
                 return res.json({ 
                     status: 'partial', 
                     message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`,
@@ -279,9 +279,7 @@ app.post('/api/return', async (req, res) => {
                 });
             }
         } else {
-            // ===== تخصيص: credit_notes/{id}/allocations =====
-            // الـ Endpoint الصحيح: POST /credit_notes/{cnId}/allocations
-            // يخصص إشعار الدائن للفاتورة فتصبح "Paid" أو ينقص مبلغها
+            // ===== تخصيص للفاتورة: POST /credit_notes/{id}/allocations =====
             try {
                 const allocRes = await qoyodClient.post(`/credit_notes/${cnId}/allocations`, {
                     allocation: {
@@ -296,7 +294,7 @@ app.post('/api/return', async (req, res) => {
                     message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` 
                 });
             } catch (allocError) {
-                console.error("Allocation Error:", allocError.response?.data || allocError.message);
+                console.error("Allocation Error:", JSON.stringify(allocError.response?.data || allocError.message));
                 return res.json({ 
                     status: 'partial', 
                     message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`,
