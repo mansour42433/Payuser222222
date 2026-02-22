@@ -1,0 +1,218 @@
+const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '../public')));
+
+// 🛡️ الحارس الأمني
+app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) return next();
+    const clientPass = req.headers['x-app-password'];
+    const serverPass = process.env.APP_PASSWORD;
+    if (!serverPass) return next();
+    if (clientPass === serverPass) next();
+    else res.status(401).json({ status: 'error', message: 'كلمة المرور خاطئة' });
+});
+
+const qoyodClient = axios.create({
+    baseURL: 'https://www.qoyod.com/api/2.0',
+    headers: {
+        'API-KEY': process.env.QOYOD_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+});
+
+app.post('/api/login', (req, res) => res.json({ status: 'success' }));
+
+// 1. جلب الحسابات
+app.get('/api/accounts', async (req, res) => {
+    try {
+        const response = await qoyodClient.get('/accounts');
+        const accounts = response.data.accounts || [];
+        const validAccounts = accounts.map(acc => {
+            let name = acc.name_ar || acc.name || acc.name_en || "بدون اسم";
+            if (acc.code) name = `${acc.code} - ${name}`;
+            return { id: acc.id, name: name, raw: name.toLowerCase() };
+        });
+        const filtered = validAccounts.filter(acc => {
+            const n = acc.raw;
+            return (n.includes('1101') || n.includes('1102') || n.includes('bank') || n.includes('cash') || n.includes('نقد') || n.includes('بنك')) 
+                   && !n.includes('مخزون') && !n.includes('مدينون');
+        });
+        res.json(filtered.length > 0 ? filtered : validAccounts);
+    } catch (error) {
+        res.status(500).json({ error: 'فشل جلب الحسابات' });
+    }
+});
+
+// 2. معاينة الفاتورة (معدل لجلب منشئ الفاتورة والمخزن)
+app.post('/api/preview', async (req, res) => {
+    const { type, ref } = req.body;
+    const endpoint = type === 'sales' ? 'invoices' : 'bills';
+    try {
+        const searchRes = await qoyodClient.get(`/${endpoint}`, { params: { 'q[reference_eq]': ref } });
+        const list = searchRes.data[endpoint];
+        if (!list || list.length === 0) return res.json({ status: 'not_found', message: 'غير موجودة' });
+
+        const summaryInv = list[0];
+        
+        // جلب تفاصيل كاملة للحصول على المستخدم والمستودع
+        let inv = summaryInv;
+        try {
+            const detailRes = await qoyodClient.get(`/${endpoint}/${summaryInv.id}`);
+            inv = detailRes.data.invoice || detailRes.data.bill || summaryInv;
+        } catch (e) {
+            console.error("Error fetching detail:", e.message);
+        }
+
+        let contactName = inv.contact_name || (inv.contact ? inv.contact.name : "غير محدد");
+        
+        if ((!contactName || contactName === "غير محدد") && inv.contact_id) {
+            try {
+                const cEnd = type === 'sales' ? `/customers/${inv.contact_id}` : `/vendors/${inv.contact_id}`;
+                const cRes = await qoyodClient.get(cEnd);
+                const cData = cRes.data.customer || cRes.data.vendor || cRes.data.contact;
+                if(cData) contactName = cData.name || cData.organization;
+            } catch(e) {}
+        }
+
+        // استخراج اسم المستخدم (المنشئ) واسم المستودع
+        const userName = inv.user ? (inv.user.name || inv.user.full_name) : "غير معروف";
+        const inventoryName = inv.inventory ? inv.inventory.name : (inv.location ? inv.location.name : "غير محدد");
+
+        return res.json({
+            status: 'found',
+            id: inv.id,
+            ref: inv.reference,
+            contact: contactName,
+            issue_date: inv.issue_date,
+            total: inv.total_amount,
+            due: inv.due_amount,
+            inv_status: inv.status,
+            user_name: userName,
+            inventory_name: inventoryName
+        });
+    } catch (error) {
+        return res.json({ status: 'error', message: 'خطأ اتصال' });
+    }
+});
+
+// 3. الدفع
+app.post('/api/pay', async (req, res) => {
+    const { type, ref, accountId, forceAmount, forceDate } = req.body;
+    const isSales = type === 'sales';
+    const endpointPay = isSales ? '/invoice_payments' : '/bill_payments';
+    const payloadKey = isSales ? 'invoice_payment' : 'bill_payment';
+    const idKey = isSales ? 'invoice_id' : 'bill_id';
+    const endpointSearch = isSales ? 'invoices' : 'bills';
+
+    try {
+        const searchRes = await qoyodClient.get(`/${endpointSearch}`, { params: { 'q[reference_eq]': ref } });
+        const list = searchRes.data[endpointSearch];
+        if (!list || list.length === 0) return res.json({ status: 'error', message: 'غير موجودة' });
+
+        const inv = list[0];
+        if (inv.status === 'Paid') return res.json({ status: 'skipped', message: 'مدفوعة مسبقاً' });
+
+        let amount = forceAmount && parseFloat(forceAmount) > 0 ? String(forceAmount) : String(inv.due_amount);
+        let date = forceDate || new Date(new Date().getTime() + (3 * 60 * 60 * 1000)).toISOString().split('T')[0];
+
+        await qoyodClient.post(endpointPay, {
+            [payloadKey]: {
+                reference: `PAY-${Date.now()}`,
+                [idKey]: String(inv.id),
+                account_id: String(accountId),
+                date: date,
+                amount: amount
+            }
+        });
+        res.json({ status: 'success', amount, date });
+    } catch (error) {
+        res.json({ status: 'error', message: 'رفض العملية', details: error.response?.data || error.message });
+    }
+});
+
+// 4. الإرجاع
+app.post('/api/return', async (req, res) => {
+    const { ref, returnType, accountId } = req.body;
+
+    try {
+        const resSearch = await qoyodClient.get('/invoices', { params: { 'q[reference_eq]': ref } });
+        if (!resSearch.data.invoices || resSearch.data.invoices.length === 0) {
+            return res.json({ status: 'error', message: 'الفاتورة غير موجودة' });
+        }
+        const summaryInv = resSearch.data.invoices[0];
+
+        const detailRes = await qoyodClient.get(`/invoices/${summaryInv.id}`);
+        const inv = detailRes.data.invoice || summaryInv;
+
+        let targetInventoryId = null;
+        if (inv.inventory_id) targetInventoryId = String(inv.inventory_id);
+        else if (inv.location_id) targetInventoryId = String(inv.location_id);
+        else if (inv.line_items && inv.line_items.length > 0 && inv.line_items[0].inventory_id) {
+            targetInventoryId = String(inv.line_items[0].inventory_id);
+        }
+
+        if (!targetInventoryId) {
+            return res.json({ status: 'error', message: 'الفاتورة الأصلية لا تحتوي على مستودع (Inventory ID)' });
+        }
+
+        const creditLineItems = (inv.line_items || []).map(item => ({
+            product_id: item.product_id,
+            description: item.description || "استرجاع",
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            discount_percent: item.discount_percent || "0.0",
+            tax_percent: item.tax_percent
+        }));
+
+        const uniqueRef = `RET-${inv.reference}-${Date.now().toString().slice(-4)}`;
+        
+        const cnPayload = {
+            credit_note: {
+                contact_id: inv.contact_id,
+                reference: uniqueRef,
+                issue_date: new Date().toISOString().split('T')[0],
+                status: "Approved",
+                inventory_id: targetInventoryId,
+                line_items: creditLineItems
+            }
+        };
+
+        const resCN = await qoyodClient.post('/credit_notes', cnPayload);
+        const creditNote = resCN.data.credit_note || resCN.data;
+
+        if (returnType === 'refund') {
+            await qoyodClient.post('/credit_note_payments', {
+                credit_note_payment: {
+                    credit_note_id: creditNote.id,
+                    account_id: accountId,
+                    amount: creditNote.total_amount || creditNote.total,
+                    date: new Date().toISOString().split('T')[0]
+                }
+            });
+            return res.json({ status: 'success', message: 'تم الإرجاع + استرداد نقدي' });
+        } else {
+            await qoyodClient.post(`/credit_notes/${creditNote.id}/allocations`, {
+                allocation: {
+                    invoice_id: inv.id,
+                    amount: creditNote.total_amount || creditNote.total
+                }
+            });
+            return res.json({ status: 'success', message: 'تم الإرجاع + تخصيص الرصيد' });
+        }
+
+    } catch (error) {
+        console.error("Return Failed:", error.message);
+        let details = error.response?.data || error.message;
+        res.json({ status: 'error', details: details });
+    }
+});
+
+module.exports = app;
