@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام مدفوعات قيود المتكامل</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Tajawal', sans-serif; background-color: #f3f4f6; }
+        .tab-btn { padding: 1rem; cursor: pointer; font-weight: bold; transition: all 0.2s; border-bottom: 4px solid transparent; }
+        .tab-active { border-bottom-color: #2563eb; color: #1e40af; background-color: #eff6ff; }
+        .tab-inactive { color: #6b7280; }
+        .tab-inactive:hover { background-color: #ffffff; color: #374151; }
+        
+        .custom-table th { background-color: #1e40af; color: white; white-space: nowrap; }
+        .custom-table tr:nth-child(even) { background-color: #f8fafc; }
+        .custom-table tr:hover { background-color: #eff6ff; }
+        
+        input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+
+        /* WhatsApp Filter Styles */
+        .whatsapp-container { text-align: center; }
+        .whatsapp-h2 { color: #075e54; margin-bottom: 20px; font-weight: bold; font-size: 1.5rem; }
+        .whatsapp-textarea { width: 100%; height: 150px; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 8px; resize: vertical; font-size: 16px; box-sizing: border-box; }
+        .whatsapp-btn { background-color: #25d366; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 8px; cursor: pointer; margin: 5px; font-weight: bold; transition: background 0.2s; }
+        .whatsapp-btn:hover { background-color: #128c7e; }
+        .whatsapp-copy-btn { background-color: #34b7f1; }
+        .whatsapp-copy-btn:hover { background-color: #0d8ecf; }
+        .whatsapp-output-area { margin-top: 20px; border-top: 2px dashed #ddd; padding-top: 20px; }
+        .whatsapp-note { font-size: 13px; color: #666; margin-bottom: 10px; text-align: right; background: #e8f5e9; padding: 8px; border-radius: 5px; }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div id="loginScreen" class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-gray-100">
+        <h2 class="text-2xl font-bold mb-6 text-gray-800">تسجيل الدخول للنظام</h2>
+        <input type="password" id="appPass" placeholder="أدخل كلمة المرور" class="w-full p-4 border border-gray-300 rounded-xl mb-4 text-center text-lg focus:ring-2 focus:ring-blue-500 outline-none transition">
+        <button onclick="checkPass()" id="loginBtn" class="w-full bg-blue-600 text-white p-4 rounded-xl font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200">دخول</button>
+        <p id="loginError" class="text-red-500 mt-4 text-sm font-bold hidden bg-red-50 p-2 rounded">⛔ كلمة المرور غير صحيحة</p>
+    </div>
+
+    <div id="mainApp" class="bg-white rounded-2xl shadow-2xl w-full max-w-7xl hidden overflow-hidden border border-gray-200 flex flex-col min-h-[600px]">
+        
+        <header class="bg-white border-b sticky top-0 z-10">
+            <div class="px-6 py-4 flex justify-between items-center bg-gray-50 border-b">
+                <h1 class="text-xl font-extrabold text-gray-800 tracking-wide">نظام قيود الشامل <span class="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">PRO v3.0</span></h1>
+                <button onclick="logout()" class="text-red-500 text-sm font-bold hover:bg-red-50 px-4 py-2 rounded-lg transition border border-transparent hover:border-red-100">خروج</button>
+            </div>
+            
+            <div class="flex text-lg text-center bg-white shadow-sm">
+                <div onclick="switchTab('whatsapp')" id="tab-whatsapp" class="tab-btn flex-1 tab-active">📱 نسخ من الواتساب</div>
+                <div onclick="switchTab('advanced')" id="tab-advanced" class="tab-btn flex-1 tab-inactive">🛠️ دفع متقدم</div>
+                <div onclick="switchTab('returns')" id="tab-returns" class="tab-btn flex-1 tab-inactive text-red-600">🔄 إرجاع فواتير</div>
+            </div>
+        </header>
+
+        <div class="p-6 overflow-y-auto flex-1 bg-gray-50">
+            
+            <div class="mb-6 p-5 bg-white rounded-xl border border-gray-200 shadow-sm">
+                <div class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                    <div class="md:col-span-3">
+                        <label class="block font-bold text-gray-700 text-sm mb-2">نوع العملية</label>
+                        <select id="invType" class="w-full p-3 border rounded-lg bg-gray-50 font-bold text-gray-700">
+                            <option value="sales">💰 مبيعات</option>
+                            <option value="purchases">🛒 مشتريات</option>
+                        </select>
+                    </div>
+                    <div class="md:col-span-9">
+                        <label class="block font-bold text-gray-700 text-sm mb-2">حساب الخزينة / البنك</label>
+                        <select id="bankAccount" class="w-full p-3 border rounded-lg bg-gray-50">
+                            <option>جاري التحميل...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 1: WhatsApp Filter (Replaced Quick Payment) -->
+            <div id="view-whatsapp" class="block space-y-6 animate-fade-in">
+                <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm whatsapp-container">
+                    <h2 class="whatsapp-h2">استخراج الأرقام من الواتساب</h2>
+                    <p class="whatsapp-note">سيتم استخراج الرقم الأخير من كل سطر وتجاهل الكلمات (مثل: الغاء، فاتورة، التاريخ..).</p>
+
+                    <label class="block font-bold text-gray-700 mb-2 text-right">ألصق النص هنا:</label>
+                    <textarea id="whatsappInput" class="whatsapp-textarea" placeholder="[١٠/١] الاسم: 4470&#10;الغاء 4585&#10;فاتورة محوله 5464"></textarea>
+                    
+                    <div class="flex gap-2 justify-center">
+                        <button onclick="extractNumbers()" class="whatsapp-btn">تصفية واستخراج الأرقام</button>
+                        <button onclick="transferToAdvanced()" class="whatsapp-btn bg-blue-600 hover:bg-blue-700">نقل إلى الدفع المتقدم ➡️</button>
+                    </div>
+
+                    <div class="whatsapp-output-area">
+                        <label class="block font-bold text-gray-700 mb-2 text-right">النتيجة (الأرقام صافية):</label>
+                        <textarea id="whatsappOutput" class="whatsapp-textarea" readonly placeholder="ستظهر الأرقام هنا تحت بعضها..."></textarea>
+                        <button class="whatsapp-btn whatsapp-copy-btn" onclick="copyWhatsappNumbers()">نسخ الأرقام</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: Advanced Payment (Copied and Modified) -->
+            <div id="view-advanced" class="hidden animate-fade-in">
+                <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm mb-6">
+                    <div class="flex flex-col md:flex-row gap-4 items-start">
+                        <div class="flex-1 w-full">
+                            <label class="block font-bold text-gray-700 mb-2">أرقام الفواتير</label>
+                            <textarea id="advInputList" class="w-full h-24 p-4 border rounded-xl font-mono focus:ring-2 focus:ring-blue-500 outline-none" placeholder="ضع الأرقام هنا..."></textarea>
+                        </div>
+                        <button onclick="fetchDetails()" class="md:h-24 md:w-40 w-full bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-md transition flex flex-col items-center justify-center gap-2">
+                            <span class="text-2xl">📥</span>
+                            <span>جلب الفواتير</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden mb-6">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-right custom-table">
+                            <thead>
+                                <tr>
+                                    <th class="p-4 w-12 text-center"><input type="checkbox" id="selectAllRows" checked class="w-5 h-5 accent-blue-600 cursor-pointer" onclick="toggleSelectAll(this)"></th>
+                                    <th class="p-4">رقم الفاتورة</th>
+                                    <th class="p-4">العميل</th>
+                                    <th class="p-4">المنشئ / المخزن</th>
+                                    <th class="p-4">المستحق</th>
+                                    <th class="p-4 w-40 text-center">المبلغ للدفع</th>
+                                    <th class="p-4 w-48 text-center">تاريخ الدفع</th>
+                                    <th class="p-4 w-48 text-center">الحالة / النتيجة</th>
+                                </tr>
+                            </thead>
+                            <tbody id="advTableBody" class="divide-y divide-gray-100">
+                                <tr><td colspan="8" class="text-center p-8 text-gray-400 font-bold">ابدأ بإدخال أرقام الفواتير بالأعلى ثم اضغط "جلب"</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-4 justify-between items-center bg-blue-50 p-4 rounded-xl border border-blue-100 mb-6 hidden" id="totalSection">
+                    <div class="flex items-center gap-4">
+                        <span class="text-blue-800 font-bold">إجمالي المبالغ المختارة:</span>
+                        <span id="totalAmountDisplay" class="text-2xl font-black text-blue-900">0.00</span>
+                        <span class="text-blue-700 font-bold">ر.س</span>
+                    </div>
+                    <div class="flex gap-4">
+                        <button id="btnExportExcel" onclick="exportToExcel()" class="bg-white text-green-700 border border-green-200 px-6 py-3 rounded-xl font-bold hover:bg-green-50 shadow-sm transition flex items-center gap-2">📄 تصدير تقرير إكسل</button>
+                        <button onclick="startPaymentAdvanced()" id="btnPayAdv" class="bg-gradient-to-r from-green-600 to-green-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:shadow-green-200 transition flex items-center gap-2 text-lg">💸 تأكيد وتنفيذ الدفع</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 3: Returns -->
+            <div id="view-returns" class="hidden animate-fade-in">
+                <div class="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-6 flex items-start gap-3">
+                    <span class="text-2xl">ℹ️</span>
+                    <div>
+                        <h4 class="font-bold text-blue-900">آلية الإرجاع الذكي</h4>
+                        <p class="text-sm text-blue-700 mt-1">سيقوم النظام تلقائياً بالبحث عن المستودع الأصلي للفاتورة وإرجاع البضاعة إليه.</p>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-xl border border-red-100 shadow-sm relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 to-orange-400"></div>
+                    <h3 class="font-bold text-red-800 text-xl mb-6 flex items-center gap-2">🔄 إنشاء إشعار دائن (Credit Note)</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">رقم الفاتورة الأصلية</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="returnRef" class="flex-1 p-3 border rounded-lg font-mono focus:ring-2 focus:ring-red-500 outline-none" placeholder="مثال: INV-1001">
+                                <button onclick="checkReturnInvoice()" class="bg-gray-800 text-white px-4 rounded-lg font-bold hover:bg-black transition">فحص</button>
+                            </div>
+                            <div id="retStatusBox" class="hidden mt-4 p-4 bg-gray-50 border border-gray-200 rounded-lg"></div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-2">نوع الإرجاع المالي</label>
+                            <select id="returnType" class="w-full p-3 border rounded-lg font-bold bg-white focus:ring-2 focus:ring-blue-500 outline-none" onchange="toggleAccountSelect()">
+                                <option value="refund">💰 استرداد نقدي (إخراج مال للعميل)</option>
+                                <option value="credit">📉 تخصيص (خصم من رصيد الفاتورة)</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-2 flex items-center gap-1">
+                                <span id="returnHintBadge" class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
+                                <span id="returnHint">سيتم إنشاء سند صرف من الحساب المختار.</span>
+                            </p>
+                        </div>
+                    </div>
+
+                    <hr class="my-6 border-gray-100">
+                    <button onclick="processReturn()" id="btnReturn" class="w-full bg-gradient-to-r from-red-600 to-red-500 text-white p-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-red-200 hover:-translate-y-0.5 transition">🚀 تنفيذ الإرجاع الكامل</button>
+                    <div id="returnLog" class="mt-4"></div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- 1. SETUP ---
+        let userToken = localStorage.getItem("qoyod_app_pass") || "";
+        let advData = [];
+
+        if(userToken) verifyAndLogin();
+
+        async function secureFetch(url, options = {}) {
+            if (!options.headers) options.headers = {};
+            options.headers['Content-Type'] = 'application/json';
+            options.headers['x-app-password'] = userToken;
+            try {
+                const res = await fetch(url, options);
+                if (res.status === 401) { logout(); throw new Error("Auth"); }
+                return res;
+            } catch (e) {
+                throw new Error("خطأ في الاتصال بالسيرفر");
+            }
+        }
+
+        async function checkPass(){
+            const pass = document.getElementById("appPass").value;
+            const btn = document.getElementById("loginBtn");
+            const err = document.getElementById("loginError");
+            btn.innerText = "جاري التحقق..."; btn.disabled = true; err.classList.add("hidden");
+            try {
+                const res = await fetch('/api/login', { method: 'POST', headers: {'x-app-password': pass} });
+                if(res.ok) { userToken = pass; localStorage.setItem("qoyod_app_pass", pass); showApp(); } 
+                else { err.innerText = "كلمة المرور خاطئة"; err.classList.remove("hidden"); }
+            } catch(e) { err.innerText = "خطأ في الاتصال بالسيرفر"; err.classList.remove("hidden"); }
+            btn.innerText = "دخول"; btn.disabled = false;
+        }
+
+        function showApp(){ 
+            document.getElementById("loginScreen").classList.add("hidden"); 
+            document.getElementById("mainApp").classList.remove("hidden");
+            loadAccounts();
+        }
+        function logout(){ localStorage.removeItem("qoyod_app_pass"); location.reload(); }
+        function verifyAndLogin() { loadAccounts(); showApp(); }
+
+        async function loadAccounts(){
+            try {
+                const res = await secureFetch('/api/accounts');
+                const list = await res.json();
+                const sel = document.getElementById("bankAccount");
+                sel.innerHTML = "";
+                list.forEach(a => {
+                    const opt = document.createElement("option");
+                    opt.value = a.id; opt.text = a.name; sel.appendChild(opt);
+                });
+            } catch(e){}
+        }
+
+        function switchTab(t){
+            ['whatsapp','advanced','returns'].forEach(x => {
+                document.getElementById('view-'+x).classList.add('hidden');
+                document.getElementById('tab-'+x).className = "tab-btn flex-1 tab-inactive";
+            });
+            document.getElementById('view-'+t).classList.remove('hidden');
+            document.getElementById('tab-'+t).className = `tab-btn flex-1 tab-active ${t==='returns'?'text-red-700 border-red-500 bg-red-50':''}`;
+        }
+
+        // --- 2. WHATSAPP FILTER LOGIC ---
+        function extractNumbers() {
+            const text = document.getElementById("whatsappInput").value;
+            const lines = text.split('\n');
+            let extractedNumbers = [];
+            lines.forEach(line => {
+                const matches = line.match(/[0-9]+/g);
+                if (matches && matches.length > 0) {
+                    const lastNumber = matches[matches.length - 1];
+                    extractedNumbers.push(lastNumber);
+                }
+            });
+            document.getElementById("whatsappOutput").value = extractedNumbers.join('\n');
+        }
+
+        function copyWhatsappNumbers() {
+            const outputText = document.getElementById("whatsappOutput");
+            if(!outputText.value) return;
+            outputText.select();
+            navigator.clipboard.writeText(outputText.value).then(() => {
+                alert("تم نسخ الأرقام!");
+            });
+        }
+
+        function transferToAdvanced() {
+            const numbers = document.getElementById("whatsappOutput").value;
+            if(!numbers) {
+                alert("قم باستخراج الأرقام أولاً");
+                return;
+            }
+            document.getElementById("advInputList").value = numbers;
+            switchTab('advanced');
+        }
+
+        // --- 3. ADVANCED PAY LOGIC ---
+        async function fetchDetails(){
+            const rawText = document.getElementById("advInputList").value;
+            const lines = rawText.split('\n').filter(x=>x.trim());
+            if(lines.length === 0) return alert("أدخل أرقام فواتير أولاً");
+
+            const type = document.getElementById("invType").value;
+            const tbody = document.getElementById("advTableBody"); 
+            tbody.innerHTML = "<tr><td colspan='8' class='text-center p-8'><span class='text-blue-600 font-bold text-xl animate-pulse'>⏳ جاري جلب البيانات من قيود...</span></td></tr>";
+            
+            advData = [];
+            for(let line of lines) {
+                let ref = line.trim();
+                // Add prefix if it's just a number
+                if(/^\d+$/.test(ref)) {
+                    ref = (type === 'sales' ? 'INV' : 'BILL-') + ref;
+                }
+                try {
+                    const res = await secureFetch('/api/preview', { method: 'POST', body: JSON.stringify({type, ref}) });
+                    const d = await res.json();
+                    advData.push({ref, data: d});
+                } catch(e) { advData.push({ref, data: {status:'error'}}); }
+            }
+            renderAdvTable();
+            document.getElementById("totalSection").classList.remove("hidden");
+            updateTotalAmount();
+        }
+
+        function renderAdvTable(){
+            const tbody = document.getElementById("advTableBody"); tbody.innerHTML = "";
+            const today = new Date().toISOString().split('T')[0];
+
+            if(advData.length === 0) { tbody.innerHTML = "<tr><td colspan='8' class='text-center p-4 text-gray-400'>لا توجد بيانات</td></tr>"; return; }
+
+            advData.forEach((row, i) => {
+                const d = row.data;
+                if(d.status === 'not_found' || d.status === 'error') {
+                    tbody.innerHTML += `<tr class="bg-red-50 border-b border-red-100"><td class="p-4 text-center"><input type="checkbox" disabled class="w-4 h-4"></td><td class="p-4 font-mono font-bold text-red-600">${row.ref}</td><td colspan="6" class="p-4 text-red-500 font-bold text-center">❌ الفاتورة غير موجودة أو خطأ في الرقم</td></tr>`;
+                    return;
+                }
+                const isPaid = d.inv_status === 'Paid';
+                const rowClass = isPaid ? "bg-gray-50 opacity-75" : "bg-white";
+                let statusBadge = "";
+                if (row.result) {
+                    if (row.result.status === 'success') statusBadge = `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">✅ تم (${row.result.amount})</span>`;
+                    else statusBadge = `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">❌ فشل</span>`;
+                } else {
+                    statusBadge = `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isPaid?'bg-green-100 text-green-800':'bg-blue-100 text-blue-800'} border border-gray-200">${d.inv_status}</span>`;
+                }
+
+                tbody.innerHTML += `
+                    <tr class="${rowClass} border-b border-gray-100 transition hover:bg-blue-50/30">
+                        <td class="p-4 text-center"><input type="checkbox" class="chk-row w-5 h-5 accent-blue-600" data-idx="${i}" ${isPaid?'disabled':'checked'} onchange="updateTotalAmount()"></td>
+                        <td class="p-4 font-mono font-bold text-gray-700">${d.ref}</td>
+                        <td class="p-4 font-bold text-gray-800">${d.contact}</td>
+                        <td class="p-4 text-sm">
+                            <div class="font-bold text-blue-700">${d.user_name}</div>
+                            <div class="text-gray-500 text-xs">${d.inventory_name}</div>
+                        </td>
+                        <td class="p-4 font-bold text-red-600">${d.due}</td>
+                        <td class="p-4"><input type="number" value="${d.due}" class="amt-in w-full p-2 border rounded text-center font-bold focus:ring-2 focus:ring-blue-500" data-idx="${i}" ${isPaid?'disabled':''} oninput="updateTotalAmount()"></td>
+                        <td class="p-4"><input type="date" value="${today}" class="date-in w-full p-2 border rounded text-sm font-bold" data-idx="${i}" ${isPaid?'disabled':''}></td>
+                        <td class="p-4 text-center font-bold">${statusBadge}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        async function startPaymentAdvanced(){
+            const acc = document.getElementById("bankAccount").value;
+            const type = document.getElementById("invType").value;
+            const chks = document.querySelectorAll(".chk-row:checked");
+            if(chks.length === 0) return alert("⚠️ لم تقم باختيار أي فاتورة قابلة للدفع!");
+            if(!confirm(`هل أنت متأكد من دفع مبلغ ${chks.length} فاتورة؟`)) return;
+
+            const btn = document.getElementById("btnPayAdv"); btn.innerText = "⏳ جاري التنفيذ..."; btn.disabled = true;
+            for(let chk of chks) {
+                const i = chk.dataset.idx;
+                const amt = document.querySelector(`.amt-in[data-idx="${i}"]`).value;
+                const date = document.querySelector(`.date-in[data-idx="${i}"]`).value;
+                advData[i].result = null; 
+                try {
+                    const res = await secureFetch('/api/pay', { method: 'POST', body: JSON.stringify({type, ref: advData[i].ref, accountId: acc, forceAmount: amt, forceDate: date}) });
+                    const data = await res.json();
+                    advData[i].result = data;
+                } catch(e) { advData[i].result = {status:'error', details:'خطأ اتصال'}; }
+            }
+            btn.innerText = "💸 تأكيد وتنفيذ الدفع"; btn.disabled = false;
+            renderAdvTable();
+            alert("✅ تمت العملية! راجع الجدول.");
+        }
+
+        function toggleSelectAll(master) {
+            const checkboxes = document.querySelectorAll('.chk-row:not(:disabled)');
+            checkboxes.forEach(chk => chk.checked = master.checked);
+            updateTotalAmount();
+        }
+
+        function updateTotalAmount() {
+            let total = 0;
+            const rows = document.querySelectorAll('.chk-row:checked');
+            rows.forEach(chk => {
+                const idx = chk.dataset.idx;
+                const amtInput = document.querySelector(`.amt-in[data-idx="${idx}"]`);
+                if (amtInput) {
+                    total += parseFloat(amtInput.value || 0);
+                }
+            });
+            document.getElementById('totalAmountDisplay').innerText = total.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        }
+
+        function exportToExcel() {
+            if(advData.length === 0) return alert("لا توجد بيانات للتصدير");
+            const data = advData.map(item => {
+                const res = item.result || {};
+                let status = "لم يتم";
+                if(item.data.inv_status === 'Paid') status = "مدفوعة مسبقاً";
+                else if(res.status === 'success') status = "تم الدفع بنجاح";
+                else if(res.status === 'error') status = "فشل: " + (res.details || "غير معروف");
+                return { "رقم الفاتورة": item.ref, "العميل": item.data.contact || '-', "المنشئ": item.data.user_name, "المخزن": item.data.inventory_name, "المستحق": item.data.due || 0, "المبلغ المدفوع": res.amount || 0, "تاريخ العملية": res.date || '-', "الحالة النهائية": status };
+            });
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "تقرير المدفوعات");
+            XLSX.writeFile(wb, "Qoyod_Payment_Report.xlsx");
+        }
+
+        // --- 4. RETURNS LOGIC ---
+        async function checkReturnInvoice() {
+            let ref = document.getElementById("returnRef").value;
+            if(!ref) return alert("أدخل رقم الفاتورة");
+            const statusBox = document.getElementById("retStatusBox");
+            statusBox.innerHTML = `<div class="text-center text-blue-600 py-4 font-bold animate-pulse">⏳ جاري فحص الفاتورة...</div>`;
+            statusBox.classList.remove("hidden");
+
+            try {
+                const res = await secureFetch('/api/preview', { method: 'POST', body: JSON.stringify({type:'sales', ref}) });
+                const d = await res.json();
+
+                if(d.status === 'found') {
+                    const isPaid = (d.inv_status === 'Paid');
+                    document.getElementById("returnType").value = isPaid ? 'refund' : 'credit';
+                    toggleAccountSelect();
+                    statusBox.innerHTML = `
+                        <div class="flex justify-between items-center mb-2 border-b pb-2">
+                            <span class="text-sm text-gray-500">العميل</span>
+                            <b class="text-gray-900">${d.contact}</b>
+                        </div>
+                        <div class="flex justify-between items-center mb-2 border-b pb-2">
+                            <span class="text-sm text-gray-500">المنشئ / المخزن</span>
+                            <div class="text-right">
+                                <div class="text-xs font-bold text-blue-700">${d.user_name}</div>
+                                <div class="text-[10px] text-gray-500">${d.inventory_name}</div>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-sm text-gray-500">حالة الفاتورة</span>
+                            <b class="${isPaid ? 'text-green-600' : 'text-orange-500'}">${d.inv_status}</b>
+                        </div>
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-sm text-gray-500">الإجمالي</span>
+                            <b class="text-gray-900">${d.total}</b>
+                        </div>
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-sm text-gray-500">المتبقي</span>
+                            <b class="text-red-600">${d.due}</b>
+                        </div>
+                    `;
+                } else if (d.status === 'not_found') {
+                    statusBox.innerHTML = `<div class="p-4 bg-red-50 text-red-700 rounded text-center font-bold">❌ الفاتورة غير موجودة</div>`;
+                } else {
+                    statusBox.innerHTML = `<div class="p-4 bg-red-50 text-red-700 rounded text-center">❌ خطأ: ${d.message || 'غير معروف'}</div>`;
+                }
+            } catch(e) { 
+                statusBox.innerHTML = `<div class="text-red-600 text-center p-4 bg-red-50 rounded">❌ خطأ في الاتصال</div>`; 
+            }
+        }
+
+        function toggleAccountSelect() {
+            const type = document.getElementById("returnType").value;
+            const hintText = document.getElementById("returnHint");
+            const hintBadge = document.getElementById("returnHintBadge");
+            if(type === 'credit') {
+                hintText.innerText = "سيتم خفض المبلغ المستحق على الفاتورة (لن يخرج مال).";
+                hintBadge.className = "w-2 h-2 rounded-full bg-orange-500 inline-block";
+            } else {
+                hintText.innerText = "سيتم إخراج المال من الحساب المختار بالأعلى.";
+                hintBadge.className = "w-2 h-2 rounded-full bg-green-500 inline-block";
+            }
+        }
+
+        async function processReturn() {
+            let ref = document.getElementById("returnRef").value;
+            if(!ref) return alert("أدخل رقم الفاتورة");
+            const type = document.getElementById("returnType").value;
+            const acc = document.getElementById("bankAccount").value;
+            
+            if(!confirm(`⚠️ تحذير: سيتم إرجاع الفاتورة ${ref} بالكامل.\nهل أنت متأكد؟`)) return;
+
+            const btn = document.getElementById("btnReturn");
+            const log = document.getElementById("returnLog");
+            btn.disabled = true; btn.innerText = "⏳ جاري المعالجة...";
+            
+            try {
+                const res = await secureFetch('/api/return', { method: 'POST', body: JSON.stringify({ ref, returnType: type, accountId: acc }) });
+                const data = await res.json();
+                if(data.status === 'success') {
+                    log.innerHTML = `<div class="p-4 bg-green-50 text-green-800 rounded-xl border border-green-200 flex items-center gap-3 animate-fade-in"><span class="text-2xl">✅</span><div><h4 class="font-bold">تمت العملية بنجاح</h4><p class="text-sm">${data.message}</p></div></div>`;
+                } else {
+                    log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200"><h4 class="font-bold flex items-center gap-2">❌ فشل الإرجاع</h4><p class="text-sm mt-1">${data.message || 'خطأ غير معروف'}</p></div>`;
+                }
+            } catch(e) { log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200">❌ خطأ في الاتصال</div>`; }
+            btn.disabled = false; btn.innerText = "🚀 تنفيذ الإرجاع الكامل";
+        }
+    </script>
+</body>
+</html>
