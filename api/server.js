@@ -233,6 +233,7 @@ app.post('/api/return', async (req, res) => {
                 issue_date: todayDate,
                 status: "Approved",
                 inventory_id: targetInventoryId,
+                parent_id: inv.id,
                 line_items: creditLineItems
             }
         };
@@ -291,7 +292,7 @@ app.post('/api/return', async (req, res) => {
                 });
             }
         } else {
-            // ===== تخصيص: إنشاء سند قبض (Receipt) ثم تخصيصه للفاتورة =====
+            // ===== تخصيص: إنشاء سند قبض (Receipt received) ثم تخصيصه لإشعار الدائن =====
             try {
                 // الخطوة 1: إنشاء سند قبض (Receipt) بنوع received
                 const receiptRes = await qoyodClient.post('/receipts', {
@@ -308,19 +309,19 @@ app.post('/api/return', async (req, res) => {
                 const receipt = receiptRes.data.receipt;
                 console.log(`Receipt Created: ID=${receipt.id}, Amount=${receipt.amount}`);
 
-                // الخطوة 2: تخصيص السند للفاتورة
+                // الخطوة 2: تخصيص السند لإشعار الدائن (وليس الفاتورة)
                 const allocRes = await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
                     allocation: {
-                        allocatee_type: "Invoice",
-                        allocatee_id: String(inv.id),
+                        allocatee_type: "CreditNote",
+                        allocatee_id: String(cnId),
                         amount: String(cnTotal)
                     }
                 });
-                console.log(`Allocation Done: Receipt ${receipt.id} -> Invoice ${inv.id}`, allocRes.data);
+                console.log(`Allocation Done: Receipt ${receipt.id} -> CreditNote ${cnId}`, allocRes.data);
 
                 return res.json({ 
                     status: 'success', 
-                    message: `تم الإرجاع + تخصيص الرصيد للفاتورة | المرجع: ${uniqueRef}` 
+                    message: `تم الإرجاع + تخصيص إشعار الدائن | المرجع: ${uniqueRef}` 
                 });
             } catch (allocError) {
                 console.error("Allocation Error:", allocError.response?.data || allocError.message);
