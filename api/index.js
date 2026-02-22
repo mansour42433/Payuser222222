@@ -295,26 +295,42 @@ app.post('/api/return', async (req, res) => {
             }
         } else {
             // تخصيص إشعار الدائن على الفاتورة
-            // POST /credit_notes/{id}/allocations
             try {
-                const allocPayload = {
-                    allocation: {
-                        source_type: "CreditNote",
-                        source_id: String(cnId),
-                        invoice_id: String(inv.id),
-                        date: todayDate,
-                        amount: String(cnTotal)
-                    }
-                };
-                console.log(`Alloc URL: /credit_notes/${cnId}/allocations`);
-                console.log(`Alloc Payload:`, JSON.stringify(allocPayload));
+                // نجرب nested أولاً ثم مستقل
+                let allocRes = null;
+                let usedUrl = ``;
 
-                const allocRes = await qoyodClient.post(`/credit_notes/${cnId}/allocations`, allocPayload);
-                console.log(`Alloc OK:`, JSON.stringify(allocRes.data));
+                try {
+                    usedUrl = `/credit_notes/${cnId}/allocations`;
+                    allocRes = await qoyodClient.post(usedUrl, {
+                        allocation: {
+                            source_type: "CreditNote",
+                            source_id: String(cnId),
+                            invoice_id: String(inv.id),
+                            date: todayDate,
+                            amount: String(cnTotal)
+                        }
+                    });
+                } catch (e1) {
+                    console.log(`nested failed ${e1.response?.status}: ${JSON.stringify(e1.response?.data)}`);
+                    // جرب endpoint مستقل
+                    usedUrl = `/allocations`;
+                    allocRes = await qoyodClient.post(usedUrl, {
+                        allocation: {
+                            source_type: "CreditNote",
+                            source_id: String(cnId),
+                            invoice_id: String(inv.id),
+                            date: todayDate,
+                            amount: String(cnTotal)
+                        }
+                    });
+                }
+
+                console.log(`Alloc OK [${usedUrl}]:`, JSON.stringify(allocRes.data));
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
             } catch (allocError) {
                 const errData = { status: allocError.response?.status, data: allocError.response?.data, msg: allocError.message };
-                console.error("Alloc Error:", JSON.stringify(errData));
+                console.error("Alloc Error Final:", JSON.stringify(errData));
                 return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: errData });
             }
         }
