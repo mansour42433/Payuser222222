@@ -254,45 +254,27 @@ app.post('/api/return', async (req, res) => {
         console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // إرجاع نقدي: سند صرف → إشعار الدائن + سند قبض → فاتورة
+            // استرداد نقدي: سند صرف → إشعار الدائن + سند قبض → فاتورة
             try {
-                // سند صرف (دفع نقدي للعميل) → يصفي إشعار الدائن
-                const rPaidRes = await qoyodClient.post('/receipts', {
-                    receipt: {
-                        reference: `REFUND-${uniqueRef}`,
-                        contact_id: inv.contact_id,
-                        account_id: String(accountId),
-                        amount: String(cnTotal),
-                        date: todayDate,
-                        kind: "paid"
-                    }
+                // السند 1 (paid): يصرف المبلغ للعميل ويصفي إشعار الدائن
+                const r1Res = await qoyodClient.post('/receipts', {
+                    receipt: { reference: `REFUND-CN-${uniqueRef}`, contact_id: inv.contact_id, account_id: String(accountId), amount: String(cnTotal), date: todayDate, kind: "paid" }
                 });
-                const rPaid = rPaidRes.data.receipt;
-                console.log(`Receipt Paid: ID=${rPaid.id}`);
-
-                await qoyodClient.post(`/receipts/${rPaid.id}/allocations`, {
+                const r1 = r1Res.data.receipt;
+                await qoyodClient.post(`/receipts/${r1.id}/allocations`, {
                     allocation: { allocatee_type: "CreditNote", allocatee_id: String(cnId), amount: String(cnTotal) }
                 });
-                console.log(`Receipt ${rPaid.id} -> CreditNote ${cnId} OK`);
+                console.log(`r1 ${r1.id} -> CreditNote ${cnId} OK`);
 
-                // سند قبض → يغلق الفاتورة
-                const rRecRes = await qoyodClient.post('/receipts', {
-                    receipt: {
-                        reference: `INV-CLOSE-${uniqueRef}`,
-                        contact_id: inv.contact_id,
-                        account_id: String(accountId),
-                        amount: String(cnTotal),
-                        date: todayDate,
-                        kind: "received"
-                    }
+                // السند 2 (received): يغلق الفاتورة
+                const r2Res = await qoyodClient.post('/receipts', {
+                    receipt: { reference: `REFUND-INV-${uniqueRef}`, contact_id: inv.contact_id, account_id: String(accountId), amount: String(cnTotal), date: todayDate, kind: "received" }
                 });
-                const rRec = rRecRes.data.receipt;
-                console.log(`Receipt Received: ID=${rRec.id}`);
-
-                await qoyodClient.post(`/receipts/${rRec.id}/allocations`, {
+                const r2 = r2Res.data.receipt;
+                await qoyodClient.post(`/receipts/${r2.id}/allocations`, {
                     allocation: { allocatee_type: "Invoice", allocatee_id: String(inv.id), amount: String(cnTotal) }
                 });
-                console.log(`Receipt ${rRec.id} -> Invoice ${inv.id} OK`);
+                console.log(`r2 ${r2.id} -> Invoice ${inv.id} OK`);
 
                 return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` });
             } catch (refundError) {
@@ -301,34 +283,27 @@ app.post('/api/return', async (req, res) => {
                 return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: errData });
             }
         } else {
-            // تخصيص: نفس منطق الـ Refund الناجح لكن بدون صرف نقدي
-            // سند قبض → ربط بإشعار الدائن (يصفيه) + ربط بالفاتورة (تصبح Paid)
+            // تخصيص: سندان منفصلان — واحد للفاتورة وواحد لإشعار الدائن
             try {
-                // سند قبض واحد يغلق الفاتورة
-                const rInvRes = await qoyodClient.post('/receipts', {
-                    receipt: {
-                        reference: `ALLOC-INV-${uniqueRef}`,
-                        contact_id: inv.contact_id,
-                        account_id: String(accountId),
-                        amount: String(cnTotal),
-                        date: todayDate,
-                        kind: "received"
-                    }
+                // السند 1: يغلق الفاتورة
+                const r1Res = await qoyodClient.post('/receipts', {
+                    receipt: { reference: `ALLOC-INV-${uniqueRef}`, contact_id: inv.contact_id, account_id: String(accountId), amount: String(cnTotal), date: todayDate, kind: "received" }
                 });
-                const rInv = rInvRes.data.receipt;
-                console.log(`Receipt for Invoice: ID=${rInv.id}`);
-
-                // اربط بالفاتورة → تصبح Paid
-                await qoyodClient.post(`/receipts/${rInv.id}/allocations`, {
+                const r1 = r1Res.data.receipt;
+                await qoyodClient.post(`/receipts/${r1.id}/allocations`, {
                     allocation: { allocatee_type: "Invoice", allocatee_id: String(inv.id), amount: String(cnTotal) }
                 });
-                console.log(`Receipt ${rInv.id} -> Invoice ${inv.id} OK`);
+                console.log(`r1 ${r1.id} -> Invoice ${inv.id} OK`);
 
-                // اربط بإشعار الدائن → يصبح Used
-                await qoyodClient.post(`/receipts/${rInv.id}/allocations`, {
+                // السند 2: يصفي إشعار الدائن
+                const r2Res = await qoyodClient.post('/receipts', {
+                    receipt: { reference: `ALLOC-CN-${uniqueRef}`, contact_id: inv.contact_id, account_id: String(accountId), amount: String(cnTotal), date: todayDate, kind: "received" }
+                });
+                const r2 = r2Res.data.receipt;
+                await qoyodClient.post(`/receipts/${r2.id}/allocations`, {
                     allocation: { allocatee_type: "CreditNote", allocatee_id: String(cnId), amount: String(cnTotal) }
                 });
-                console.log(`Receipt ${rInv.id} -> CreditNote ${cnId} OK`);
+                console.log(`r2 ${r2.id} -> CreditNote ${cnId} OK`);
 
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
             } catch (allocError) {
