@@ -294,44 +294,39 @@ app.post('/api/return', async (req, res) => {
                 });
             }
         } else {
-            // تخصيص إشعار الدائن على الفاتورة
-            try {
-                // نجرب nested أولاً ثم مستقل
-                let allocRes = null;
-                let usedUrl = ``;
+            // تخصيص - نجرب 4 payloads مختلفة على /allocations
+            const payloads = [
+                // 1: source_type + source_id + invoice_id (string amounts)
+                { allocation: { source_type: "CreditNote", source_id: String(cnId), invoice_id: String(inv.id), date: todayDate, amount: String(cnTotal) } },
+                // 2: نفس الشيء لكن amount كرقم
+                { allocation: { source_type: "CreditNote", source_id: cnId, invoice_id: inv.id, date: todayDate, amount: cnTotal } },
+                // 3: allocatable بدل source
+                { allocation: { allocatable_type: "CreditNote", allocatable_id: cnId, invoice_id: inv.id, date: todayDate, amount: String(cnTotal) } },
+                // 4: credit_note_id مباشرة
+                { allocation: { credit_note_id: cnId, invoice_id: inv.id, date: todayDate, amount: String(cnTotal) } },
+            ];
 
+            let success = false;
+            const results = [];
+
+            for (let i = 0; i < payloads.length; i++) {
                 try {
-                    usedUrl = `/credit_notes/${cnId}/allocations`;
-                    allocRes = await qoyodClient.post(usedUrl, {
-                        allocation: {
-                            source_type: "CreditNote",
-                            source_id: String(cnId),
-                            invoice_id: String(inv.id),
-                            date: todayDate,
-                            amount: String(cnTotal)
-                        }
-                    });
-                } catch (e1) {
-                    console.log(`nested failed ${e1.response?.status}: ${JSON.stringify(e1.response?.data)}`);
-                    // جرب endpoint مستقل
-                    usedUrl = `/allocations`;
-                    allocRes = await qoyodClient.post(usedUrl, {
-                        allocation: {
-                            source_type: "CreditNote",
-                            source_id: String(cnId),
-                            invoice_id: String(inv.id),
-                            date: todayDate,
-                            amount: String(cnTotal)
-                        }
-                    });
+                    console.log(`Trying payload ${i+1}:`, JSON.stringify(payloads[i]));
+                    const r = await qoyodClient.post(`/allocations`, payloads[i]);
+                    console.log(`SUCCESS payload ${i+1}:`, JSON.stringify(r.data));
+                    success = true;
+                    break;
+                } catch (e) {
+                    const err = { payload: i+1, status: e.response?.status, data: e.response?.data };
+                    results.push(err);
+                    console.log(`Failed payload ${i+1} [${e.response?.status}]:`, JSON.stringify(e.response?.data));
                 }
+            }
 
-                console.log(`Alloc OK [${usedUrl}]:`, JSON.stringify(allocRes.data));
+            if (success) {
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
-            } catch (allocError) {
-                const errData = { status: allocError.response?.status, data: allocError.response?.data, msg: allocError.message };
-                console.error("Alloc Error Final:", JSON.stringify(errData));
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: errData });
+            } else {
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: results });
             }
         }
 
