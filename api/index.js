@@ -243,73 +243,56 @@ app.post('/api/return', async (req, res) => {
         console.log("Credit Note Payload:", JSON.stringify(cnPayload, null, 2));
 
         const resCN = await qoyodClient.post('/credit_notes', cnPayload);
+
+        // طباعة الرد الكامل لمعرفة أسماء الحقول
+        console.log('CN Full Response:', JSON.stringify(resCN.data, null, 2));
+
         const creditNote = resCN.data.credit_note || resCN.data.note || resCN.data;
         const cnId = creditNote.id;
-        const cnTotal = creditNote.total_amount || creditNote.total;
+        const cnTotal = parseFloat(creditNote.total_amount || creditNote.total || creditNote.amount || creditNote.grand_total || 0);
 
         if (!cnId) {
-            return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن - لم يتم الحصول على ID', details: resCN.data });
+            return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن', details: resCN.data });
+        }
+        if (!cnTotal) {
+            return res.json({ status: 'error', message: 'المبلغ صفر أو غير موجود في إشعار الدائن', details: creditNote });
         }
 
         console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // ===== إرجاع أموال نقدي: POST /credit_note_payments =====
+            // إرجاع أموال نقدي: POST /credit_note_payments
             try {
                 const refundRes = await qoyodClient.post('/credit_note_payments', {
                     credit_note_payment: {
-                        credit_note_id: String(cnId),
-                        account_id: String(accountId),
-                        amount: String(cnTotal),
+                        credit_note_id: cnId,
+                        account_id: accountId,
+                        amount: cnTotal,
                         date: todayDate
                     }
                 });
-                console.log(`Refund Done:`, JSON.stringify(refundRes.data));
-                return res.json({ 
-                    status: 'success', 
-                    message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` 
-                });
+                console.log('Refund Done:', JSON.stringify(refundRes.data));
+                return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` });
             } catch (refundError) {
-                const errData = {
-                    status: refundError.response?.status,
-                    data: refundError.response?.data,
-                    msg: refundError.message
-                };
-                console.error("Refund Error FULL:", JSON.stringify(errData));
-                return res.json({ 
-                    status: 'partial', 
-                    message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`,
-                    details: errData
-                });
+                const errData = { status: refundError.response?.status, data: refundError.response?.data, msg: refundError.message };
+                console.error('Refund Error:', JSON.stringify(errData));
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: errData });
             }
         } else {
-            // ===== تخصيص للفاتورة: POST /credit_notes/{id}/allocations =====
+            // تخصيص للفاتورة: POST /credit_notes/{id}/allocations
             try {
-                const allocPayload = {
+                const allocRes = await qoyodClient.post(`/credit_notes/${cnId}/allocations`, {
                     allocation: {
-                        invoice_id: String(inv.id),
-                        amount: String(cnTotal)
+                        invoice_id: inv.id,
+                        amount: cnTotal
                     }
-                };
-                console.log(`Trying allocation: CreditNote ${cnId} -> Invoice ${inv.id}`, JSON.stringify(allocPayload));
-                const allocRes = await qoyodClient.post(`/credit_notes/${cnId}/allocations`, allocPayload);
-                console.log(`Allocation Done:`, JSON.stringify(allocRes.data));
-                return res.json({ 
-                    status: 'success', 
-                    message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` 
                 });
+                console.log('Allocation Done:', JSON.stringify(allocRes.data));
+                return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
             } catch (allocError) {
-                const errData = {
-                    status: allocError.response?.status,
-                    data: allocError.response?.data,
-                    msg: allocError.message
-                };
-                console.error("Allocation Error FULL:", JSON.stringify(errData));
-                return res.json({ 
-                    status: 'partial', 
-                    message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`,
-                    details: errData
-                });
+                const errData = { status: allocError.response?.status, data: allocError.response?.data, msg: allocError.message };
+                console.error('Allocation Error:', JSON.stringify(errData));
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: errData });
             }
         }
 
