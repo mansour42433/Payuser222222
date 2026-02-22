@@ -503,7 +503,7 @@
                 if(data.status === 'success') {
                     log.innerHTML = `<div class="p-4 bg-green-50 text-green-800 rounded-xl border border-green-200 flex items-center gap-3 animate-fade-in"><span class="text-2xl">✅</span><div><h4 class="font-bold">تمت العملية بنجاح</h4><p class="text-sm">${data.message}</p></div></div>`;
                 } else {
-                    log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200"><h4 class="font-bold flex items-center gap-2">❌ فشل الإرجاع</h4><p class="text-sm mt-1">${data.message || 'خطأ غير معروف'}</p></div>`;
+                    log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200"><h4 class="font-bold flex items-center gap-2">❌ فشل الإرجاع</h4><p class="text-sm mt-1">${data.message || 'خطأ غير معروف'}</p><pre class="text-xs mt-2 bg-red-100 p-2 rounded overflow-auto" dir="ltr">${JSON.stringify(data.details, null, 2)}</pre></div>`;
                 }
             } catch(e) { log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200">❌ خطأ في الاتصال</div>`; }
             btn.disabled = false; btn.innerText = "🚀 تنفيذ الإرجاع الكامل";
