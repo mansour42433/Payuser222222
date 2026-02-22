@@ -251,82 +251,56 @@ app.post('/api/return', async (req, res) => {
             return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن - لم يتم الحصول على ID', details: resCN.data });
         }
 
-        console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Ref=${uniqueRef}`);
+        console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Status=${creditNote.status}, Ref=${uniqueRef}`);
+
+        // إذا الإشعار ليس Approved، نحاول نحدّثه
+        if (creditNote.status !== "Approved") {
+            try {
+                const approveRes = await qoyodClient.put(`/credit_notes/${cnId}`, {
+                    credit_note: { status: "Approved" }
+                });
+                console.log(`Approve CN result:`, JSON.stringify(approveRes.data?.credit_note?.status || approveRes.data?.note?.status));
+            } catch (approveErr) {
+                console.log(`Approve CN failed:`, JSON.stringify(approveErr.response?.data));
+            }
+        }
 
         if (returnType === 'refund') {
-            // ===== إرجاع أموال: إنشاء سند صرف (Receipt) ثم تخصيصه لإشعار الدائن =====
+            // إرجاع أموال نقدي
             try {
-                // الخطوة 1: إنشاء سند صرف (Receipt) بنوع paid
-                const receiptRes = await qoyodClient.post('/receipts', {
-                    receipt: {
-                        reference: `REFUND-${uniqueRef}`,
-                        contact_id: inv.contact_id,
+                const refundRes = await qoyodClient.post('/credit_note_payments', {
+                    credit_note_payment: {
+                        credit_note_id: String(cnId),
                         account_id: String(accountId),
-                        amount: String(cnTotal),
                         date: todayDate,
-                        kind: "paid",
-                        description: `إرجاع أموال - ${uniqueRef}`
-                    }
-                });
-                const receipt = receiptRes.data.receipt;
-                console.log(`Receipt Created: ID=${receipt.id}, Amount=${receipt.amount}`);
-
-                // الخطوة 2: تخصيص السند لإشعار الدائن
-                const allocRes = await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
-                    allocation: {
-                        allocatee_type: "CreditNote",
-                        allocatee_id: String(cnId),
                         amount: String(cnTotal)
                     }
                 });
-                console.log(`Allocation Done: Receipt ${receipt.id} -> CreditNote ${cnId}`, allocRes.data);
-
-                return res.json({ 
-                    status: 'success', 
-                    message: `تم الإرجاع + استرداد نقدي | المرجع: ${uniqueRef} | سند الصرف: ${receipt.reference}` 
-                });
+                console.log(`Refund OK:`, JSON.stringify(refundRes.data));
+                return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` });
             } catch (refundError) {
-                console.error("Refund Error:", refundError.response?.data || refundError.message);
-                return res.json({ 
-                    status: 'partial', 
-                    message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`,
-                    details: refundError.response?.data || refundError.message
-                });
+                const errData = { status: refundError.response?.status, data: refundError.response?.data, msg: refundError.message };
+                console.error("Refund Error:", JSON.stringify(errData));
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: errData });
             }
         } else {
-            // تخصيص - نجرب 4 payloads مختلفة على /allocations
-            const payloads = [
-                // 1: source_type + source_id + invoice_id (string amounts)
-                { allocation: { source_type: "CreditNote", source_id: String(cnId), invoice_id: String(inv.id), date: todayDate, amount: String(cnTotal) } },
-                // 2: نفس الشيء لكن amount كرقم
-                { allocation: { source_type: "CreditNote", source_id: cnId, invoice_id: inv.id, date: todayDate, amount: cnTotal } },
-                // 3: allocatable بدل source
-                { allocation: { allocatable_type: "CreditNote", allocatable_id: cnId, invoice_id: inv.id, date: todayDate, amount: String(cnTotal) } },
-                // 4: credit_note_id مباشرة
-                { allocation: { credit_note_id: cnId, invoice_id: inv.id, date: todayDate, amount: String(cnTotal) } },
-            ];
-
-            let success = false;
-            const results = [];
-
-            for (let i = 0; i < payloads.length; i++) {
-                try {
-                    console.log(`Trying payload ${i+1}:`, JSON.stringify(payloads[i]));
-                    const r = await qoyodClient.post(`/allocations`, payloads[i]);
-                    console.log(`SUCCESS payload ${i+1}:`, JSON.stringify(r.data));
-                    success = true;
-                    break;
-                } catch (e) {
-                    const err = { payload: i+1, status: e.response?.status, data: e.response?.data };
-                    results.push(err);
-                    console.log(`Failed payload ${i+1} [${e.response?.status}]:`, JSON.stringify(e.response?.data));
-                }
-            }
-
-            if (success) {
+            // تخصيص إشعار الدائن على الفاتورة
+            try {
+                const allocRes = await qoyodClient.post(`/credit_notes/${cnId}/allocations`, {
+                    allocation: {
+                        source_type: "CreditNote",
+                        source_id: String(cnId),
+                        invoice_id: String(inv.id),
+                        date: todayDate,
+                        amount: String(cnTotal)
+                    }
+                });
+                console.log(`Alloc OK:`, JSON.stringify(allocRes.data));
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
-            } else {
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: results });
+            } catch (allocError) {
+                const errData = { status: allocError.response?.status, data: allocError.response?.data, msg: allocError.message };
+                console.error("Alloc Error:", JSON.stringify(errData));
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: errData });
             }
         }
 
