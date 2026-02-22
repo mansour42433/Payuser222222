@@ -254,12 +254,12 @@ app.post('/api/return', async (req, res) => {
         console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // إرجاع أموال:
-            // 1) أنشئ Receipt نوع paid (صرف مبلغ للعميل)
-            // 2) اربط الـ Receipt بإشعار الدائن (يصفّي الإشعار)
-            // 3) اربط الـ Receipt بالفاتورة (تصبح الفاتورة Paid)
+            // إرجاع نقدي:
+            // 1) Receipt (paid) → يصرف المبلغ للعميل ويُصفي إشعار الدائن
+            // 2) Receipt (received) → يُغلق الفاتورة عبر إشعار الدائن
             try {
-                const receiptRes = await qoyodClient.post('/receipts', {
+                // سند الصرف: إرجاع المبلغ نقداً للعميل
+                const receiptPaidRes = await qoyodClient.post('/receipts', {
                     receipt: {
                         reference: `REFUND-${uniqueRef}`,
                         contact_id: inv.contact_id,
@@ -269,28 +269,34 @@ app.post('/api/return', async (req, res) => {
                         kind: "paid"
                     }
                 });
-                const receipt = receiptRes.data.receipt;
-                console.log(`Receipt Created: ID=${receipt.id}`);
+                const receiptPaid = receiptPaidRes.data.receipt;
+                console.log(`Receipt Paid Created: ID=${receiptPaid.id}`);
 
-                // اربط الـ Receipt بإشعار الدائن
-                await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
-                    allocation: {
-                        allocatee_type: "CreditNote",
-                        allocatee_id: String(cnId),
-                        amount: String(cnTotal)
+                // اربط سند الصرف بإشعار الدائن (يصفي الإشعار)
+                await qoyodClient.post(`/receipts/${receiptPaid.id}/allocations`, {
+                    allocation: { allocatee_type: "CreditNote", allocatee_id: String(cnId), amount: String(cnTotal) }
+                });
+                console.log(`Receipt ${receiptPaid.id} -> CreditNote ${cnId} OK`);
+
+                // سند القبض: يُغلق الفاتورة (المبلغ مقابل إشعار الدائن)
+                const receiptReceivedRes = await qoyodClient.post('/receipts', {
+                    receipt: {
+                        reference: `INV-CLOSE-${uniqueRef}`,
+                        contact_id: inv.contact_id,
+                        account_id: String(accountId),
+                        amount: String(cnTotal),
+                        date: todayDate,
+                        kind: "received"
                     }
                 });
-                console.log(`Receipt ${receipt.id} -> CreditNote ${cnId} OK`);
+                const receiptReceived = receiptReceivedRes.data.receipt;
+                console.log(`Receipt Received Created: ID=${receiptReceived.id}`);
 
-                // اربط الـ Receipt بالفاتورة
-                await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
-                    allocation: {
-                        allocatee_type: "Invoice",
-                        allocatee_id: String(inv.id),
-                        amount: String(cnTotal)
-                    }
+                // اربط سند القبض بالفاتورة (تصبح الفاتورة Paid)
+                await qoyodClient.post(`/receipts/${receiptReceived.id}/allocations`, {
+                    allocation: { allocatee_type: "Invoice", allocatee_id: String(inv.id), amount: String(cnTotal) }
                 });
-                console.log(`Receipt ${receipt.id} -> Invoice ${inv.id} OK`);
+                console.log(`Receipt ${receiptReceived.id} -> Invoice ${inv.id} OK`);
 
                 return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` });
             } catch (refundError) {
@@ -299,17 +305,34 @@ app.post('/api/return', async (req, res) => {
                 return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: errData });
             }
         } else {
-            // تخصيص الإشعار للفاتورة:
-            // اربط الـ CreditNote بالفاتورة عبر allocations من جهة الفاتورة
+            // تخصيص (بدون نقد):
+            // Receipt (received) كجسر → يُغلق إشعار الدائن ويُغلق الفاتورة معاً
             try {
-                const allocRes = await qoyodClient.post(`/invoices/${inv.id}/allocations`, {
-                    allocation: {
-                        allocatee_type: "CreditNote",
-                        allocatee_id: String(cnId),
-                        amount: String(cnTotal)
+                const receiptRes = await qoyodClient.post('/receipts', {
+                    receipt: {
+                        reference: `ALLOC-${uniqueRef}`,
+                        contact_id: inv.contact_id,
+                        account_id: String(accountId),
+                        amount: String(cnTotal),
+                        date: todayDate,
+                        kind: "received"
                     }
                 });
-                console.log(`Invoice ${inv.id} -> CreditNote ${cnId} OK`, JSON.stringify(allocRes.data));
+                const receipt = receiptRes.data.receipt;
+                console.log(`Receipt Created: ID=${receipt.id}`);
+
+                // اربط بإشعار الدائن (يصفي الإشعار)
+                await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
+                    allocation: { allocatee_type: "CreditNote", allocatee_id: String(cnId), amount: String(cnTotal) }
+                });
+                console.log(`Receipt ${receipt.id} -> CreditNote ${cnId} OK`);
+
+                // اربط بالفاتورة (تصبح الفاتورة Paid)
+                await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
+                    allocation: { allocatee_type: "Invoice", allocatee_id: String(inv.id), amount: String(cnTotal) }
+                });
+                console.log(`Receipt ${receipt.id} -> Invoice ${inv.id} OK`);
+
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
             } catch (allocError) {
                 const errData = { status: allocError.response?.status, data: allocError.response?.data, msg: allocError.message };
