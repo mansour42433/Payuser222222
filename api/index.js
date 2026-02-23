@@ -182,10 +182,7 @@ app.post('/api/return', async (req, res) => {
 
         // د) بناء line_items مع الحفاظ على نفس الوحدة (unit_type) من الفاتورة الأصلية
         const creditLineItems = (inv.line_items || []).map(item => {
-            // رفع unit_price لأعلى بـ 4 خانات عشرية لضمان أن قيود يحسب الإجمالي صحيحاً
-            // مثال: 65.2173913043 → 65.2174 فيعطي 225.00 بدل 224.99
-            const rawPrice = parseFloat(item.unit_price || 0);
-            const ceilPrice = Math.ceil(rawPrice * 10000) / 10000;
+            const ceilPrice = Math.ceil(parseFloat(item.unit_price || 0) * 10000) / 10000;
             const lineItem = {
                 product_id: item.product_id,
                 description: item.description || "استرجاع",
@@ -250,16 +247,17 @@ app.post('/api/return', async (req, res) => {
         const creditNote = resCN.data.credit_note || resCN.data.note || resCN.data;
         const cnId = creditNote.id;
         const cnTotal = creditNote.total_amount || creditNote.total;
-        const allocAmount = String(parseFloat(cnTotal).toFixed(2));
+        // نستخدم inv.due_amount للتخصيص لإغلاق الفاتورة بالكامل
+        // قيود يقبل مبلغ أعلى من cnTotal ويصفي الإشعار بالكامل
+        const allocAmount = String(parseFloat(inv.due_amount).toFixed(2));
 
         if (!cnId) {
             return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن - لم يتم الحصول على ID', details: resCN.data });
         }
 
-        console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, AllocAmount=${allocAmount}, InvDue=${inv.due_amount}, Ref=${uniqueRef}`);
+        console.log(`Credit Note Created: ID=${cnId}, CN=${cnTotal}, InvDue=${inv.due_amount}, AllocAmount=${allocAmount}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // استرداد نقدي: سند صرف → يصفي إشعار الدائن
             try {
                 const receiptRes = await qoyodClient.post('receipts', {
                     receipt: {
@@ -273,21 +271,15 @@ app.post('/api/return', async (req, res) => {
                 });
                 const receipt = receiptRes.data.receipt;
                 await qoyodClient.post(`receipts/${receipt.id}/allocations`, {
-                    allocation: {
-                        allocatee_type: 'CreditNote',
-                        allocatee_id: String(cnId),
-                        amount: allocAmount
-                    }
+                    allocation: { allocatee_type: 'CreditNote', allocatee_id: String(cnId), amount: allocAmount }
                 });
                 console.log(`Refund OK: Receipt ${receipt.id} -> CreditNote ${cnId} | Amount: ${allocAmount}`);
                 return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` });
-            } catch (refundError) {
-                const errData = { status: refundError.response?.status, data: refundError.response?.data };
-                console.error('Refund Error:', JSON.stringify(errData));
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: errData });
+            } catch (e) {
+                console.error('Refund Error:', JSON.stringify({ status: e.response?.status, data: e.response?.data }));
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: e.response?.data });
             }
         } else {
-            // تخصيص: POST /invoices/{id}/allocations (الطريقة الرسمية)
             try {
                 const allocRes = await qoyodClient.post(`invoices/${inv.id}/allocations`, {
                     invoice: {
@@ -302,10 +294,9 @@ app.post('/api/return', async (req, res) => {
                 const invStatus = allocRes.data?.invoice?.status;
                 console.log(`Alloc OK: CreditNote ${cnId} -> Invoice ${inv.id} | Status: ${invStatus} | Amount: ${allocAmount}`);
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
-            } catch (allocError) {
-                const errData = { status: allocError.response?.status, data: allocError.response?.data };
-                console.error('Alloc Error:', JSON.stringify(errData));
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: errData });
+            } catch (e) {
+                console.error('Alloc Error:', JSON.stringify({ status: e.response?.status, data: e.response?.data }));
+                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: e.response?.data });
             }
         }
 
