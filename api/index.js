@@ -152,7 +152,7 @@ app.post('/api/pay', async (req, res) => {
     }
 });
 
-// 4. الإرجاع (محدّث: تسمية CRN تسلسلي + إصلاح الوحدات + إصلاح التخصيص وإرجاع الأموال)
+// 4. الإرجاع (محدّث: تمرير السعر والضريبة بدون تقريب)
 app.post('/api/return', async (req, res) => {
     const { ref, returnType, accountId } = req.body;
 
@@ -182,15 +182,18 @@ app.post('/api/return', async (req, res) => {
 
         // د) بناء line_items مع الحفاظ على نفس الوحدة (unit_type) من الفاتورة الأصلية
         const creditLineItems = (inv.line_items || []).map(item => {
-            const ceilPrice = Math.ceil(parseFloat(item.unit_price || 0) * 10000) / 10000;
             const lineItem = {
                 product_id: item.product_id,
                 description: item.description || "استرجاع",
                 quantity: item.quantity,
-                unit_price: String(ceilPrice),
+                // تمرير السعر كما هو تماماً كنص بدون تقريب
+                unit_price: String(item.unit_price), 
                 discount_percent: item.discount_percent || "0.0",
-                tax_percent: item.tax_percent
+                tax_percent: item.tax_percent,
+                // تمرير حالة الضريبة لتتطابق حسبة الإشعار مع الفاتورة
+                is_inclusive: item.is_inclusive !== undefined ? item.is_inclusive : (inv.is_inclusive || false)
             };
+            
             // إصلاح مشكلة الوحدات: نسخ unit_type من الفاتورة الأصلية
             if (item.unit_type) {
                 lineItem.unit_type = String(item.unit_type);
@@ -247,8 +250,8 @@ app.post('/api/return', async (req, res) => {
         const creditNote = resCN.data.credit_note || resCN.data.note || resCN.data;
         const cnId = creditNote.id;
         const cnTotal = creditNote.total_amount || creditNote.total;
+        
         // نستخدم inv.due_amount للتخصيص لإغلاق الفاتورة بالكامل
-        // قيود يقبل مبلغ أعلى من cnTotal ويصفي الإشعار بالكامل
         const allocAmount = String(parseFloat(inv.due_amount).toFixed(2));
 
         if (!cnId) {
