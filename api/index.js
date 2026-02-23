@@ -182,12 +182,12 @@ app.post('/api/return', async (req, res) => {
 
         // د) بناء line_items مع الحفاظ على نفس الوحدة (unit_type) من الفاتورة الأصلية
         const creditLineItems = (inv.line_items || []).map(item => {
-            const roundedPrice = (Math.round(parseFloat(item.unit_price || 0) * 100) / 100).toFixed(2);
+            // نرسل unit_price كما هو من الفاتورة — قيود هو من يحسب الإجمالي
             const lineItem = {
                 product_id: item.product_id,
                 description: item.description || "استرجاع",
                 quantity: item.quantity,
-                unit_price: roundedPrice,
+                unit_price: item.unit_price,
                 discount_percent: item.discount_percent || "0.0",
                 tax_percent: item.tax_percent
             };
@@ -247,17 +247,17 @@ app.post('/api/return', async (req, res) => {
         const creditNote = resCN.data.credit_note || resCN.data.note || resCN.data;
         const cnId = creditNote.id;
         const cnTotal = creditNote.total_amount || creditNote.total;
-        // allocAmount = المبلغ الفعلي للتخصيص (من الفاتورة مباشرة لتفادي فروق التقريب)
-        const allocAmount = parseFloat(inv.due_amount).toFixed(2);
+        // allocAmount = cnTotal الذي أعاده قيود (هو الرقم الدقيق للإشعار)
+        const allocAmount = String(parseFloat(cnTotal).toFixed(2));
 
         if (!cnId) {
             return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن - لم يتم الحصول على ID', details: resCN.data });
         }
 
-        console.log(`Credit Note Created: ID=${cnId}, Total=${cnTotal}, AllocAmount=${allocAmount}, Ref=${uniqueRef}`);
+        console.log(`Credit Note Created: ID=${cnId}, CN Total=${cnTotal}, AllocAmount=${allocAmount}, Ref=${uniqueRef}`);
 
         if (returnType === 'refund') {
-            // استرداد نقدي: سند صرف → يصفي إشعار الدائن، الفاتورة تبقى كما هي
+            // استرداد نقدي: سند صرف → يصفي إشعار الدائن بالكامل
             try {
                 const receiptRes = await qoyodClient.post('receipts', {
                     receipt: {
@@ -285,7 +285,7 @@ app.post('/api/return', async (req, res) => {
                 return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: errData });
             }
         } else {
-            // تخصيص: POST /invoices/{id}/allocations مع CreditNote (الطريقة الرسمية)
+            // تخصيص: POST /invoices/{id}/allocations (الطريقة الرسمية من قيود)
             try {
                 const allocRes = await qoyodClient.post(`invoices/${inv.id}/allocations`, {
                     invoice: {
