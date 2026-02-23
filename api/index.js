@@ -182,11 +182,14 @@ app.post('/api/return', async (req, res) => {
 
         // د) بناء line_items مع الحفاظ على نفس الوحدة (unit_type) من الفاتورة الأصلية
         const creditLineItems = (inv.line_items || []).map(item => {
+            // تقريب unit_price لتفادي أخطاء الأرقام العشرية (مثل 974.99 بدل 975.00)
+            const rawPrice = parseFloat(item.unit_price || 0);
+            const roundedPrice = Math.round(rawPrice * 100) / 100;
             const lineItem = {
                 product_id: item.product_id,
                 description: item.description || "استرجاع",
                 quantity: item.quantity,
-                unit_price: item.unit_price,
+                unit_price: String(roundedPrice),
                 discount_percent: item.discount_percent || "0.0",
                 tax_percent: item.tax_percent
             };
@@ -294,25 +297,44 @@ app.post('/api/return', async (req, res) => {
                 });
             }
         } else {
-            // تخصيص إشعار الدائن على الفاتورة مباشرة (بدون سندات)
-            // POST /invoices/{id}/allocations
+            // ===== تخصيص: إنشاء سند قبض (Receipt received) ثم تخصيصه لإشعار الدائن =====
             try {
-                const allocRes = await qoyodClient.post(`invoices/${inv.id}/allocations`, {
-                    invoice: {
-                        allocations_attributes: [{
-                            source_type: 'CreditNote',
-                            source_id: cnId,
-                            amount: String(cnTotal),
-                            date: todayDate
-                        }]
+                // الخطوة 1: إنشاء سند قبض (Receipt) بنوع received
+                const receiptRes = await qoyodClient.post('/receipts', {
+                    receipt: {
+                        reference: `ALLOC-${uniqueRef}`,
+                        contact_id: inv.contact_id,
+                        account_id: String(accountId),
+                        amount: String(cnTotal),
+                        date: todayDate,
+                        kind: "received",
+                        description: `تخصيص إشعار دائن - ${uniqueRef}`
                     }
                 });
-                console.log(`Alloc OK: CreditNote ${cnId} -> Invoice ${inv.id}`, JSON.stringify(allocRes.data?.invoice?.status));
-                return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
-            } catch (e) {
-                const err = { status: e.response?.status, data: e.response?.data };
-                console.error('Alloc Error:', JSON.stringify(err));
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: err });
+                const receipt = receiptRes.data.receipt;
+                console.log(`Receipt Created: ID=${receipt.id}, Amount=${receipt.amount}`);
+
+                // الخطوة 2: تخصيص السند لإشعار الدائن (وليس الفاتورة)
+                const allocRes = await qoyodClient.post(`/receipts/${receipt.id}/allocations`, {
+                    allocation: {
+                        allocatee_type: "CreditNote",
+                        allocatee_id: String(cnId),
+                        amount: String(cnTotal)
+                    }
+                });
+                console.log(`Allocation Done: Receipt ${receipt.id} -> CreditNote ${cnId}`, allocRes.data);
+
+                return res.json({ 
+                    status: 'success', 
+                    message: `تم الإرجاع + تخصيص إشعار الدائن | المرجع: ${uniqueRef}` 
+                });
+            } catch (allocError) {
+                console.error("Allocation Error:", allocError.response?.data || allocError.message);
+                return res.json({ 
+                    status: 'partial', 
+                    message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`,
+                    details: allocError.response?.data || allocError.message
+                });
             }
         }
 
