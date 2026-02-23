@@ -65,7 +65,7 @@ app.get('/api/accounts', async (req, res) => {
     }
 });
 
-// 2. معاينة الفاتورة (معدل لجلب منشئ الفاتورة والمخزن)
+// 2. معاينة الفاتورة
 app.post('/api/preview', async (req, res) => {
     const { type, ref } = req.body;
     const endpoint = type === 'sales' ? 'invoices' : 'bills';
@@ -76,7 +76,6 @@ app.post('/api/preview', async (req, res) => {
 
         const summaryInv = list[0];
         
-        // جلب تفاصيل كاملة للحصول على المستخدم والمستودع
         let inv = summaryInv;
         try {
             const detailRes = await qoyodClient.get(`/${endpoint}/${summaryInv.id}`);
@@ -96,7 +95,6 @@ app.post('/api/preview', async (req, res) => {
             } catch(e) {}
         }
 
-        // استخراج اسم المستخدم (المنشئ) واسم المستودع
         const userName = inv.user ? (inv.user.name || inv.user.full_name) : "غير معروف";
         const inventoryName = inv.inventory ? inv.inventory.name : (inv.location ? inv.location.name : "غير محدد");
 
@@ -152,7 +150,7 @@ app.post('/api/pay', async (req, res) => {
     }
 });
 
-// 4. الإرجاع (محدّث: تمرير السعر والضريبة بدون تقريب)
+// 4. الإرجاع (الشامل لحل مشاكل الضريبة والهللة)
 app.post('/api/return', async (req, res) => {
     const { ref, returnType, accountId } = req.body;
 
@@ -164,7 +162,7 @@ app.post('/api/return', async (req, res) => {
         }
         const summaryInv = resSearch.data.invoices[0];
 
-        // ب) جلب التفاصيل الكاملة للفاتورة (تشمل line_items مع unit_type)
+        // ب) جلب التفاصيل الكاملة للفاتورة
         const detailRes = await qoyodClient.get(`/invoices/${summaryInv.id}`);
         const inv = detailRes.data.invoice || summaryInv;
 
@@ -180,21 +178,28 @@ app.post('/api/return', async (req, res) => {
             return res.json({ status: 'error', message: 'الفاتورة الأصلية لا تحتوي على مستودع (Inventory ID)' });
         }
 
-        // د) بناء line_items مع الحفاظ على نفس الوحدة (unit_type) من الفاتورة الأصلية
+        // د) بناء line_items مع ضمان نقل كافة تفاصيل الخصم والضريبة كما هي
         const creditLineItems = (inv.line_items || []).map(item => {
             const lineItem = {
                 product_id: item.product_id,
                 description: item.description || "استرجاع",
                 quantity: item.quantity,
-                // تمرير السعر كما هو تماماً كنص بدون تقريب
+                // نمرر السعر كما هو تماماً
                 unit_price: String(item.unit_price), 
-                discount_percent: item.discount_percent || "0.0",
-                tax_percent: item.tax_percent,
-                // تمرير حالة الضريبة لتتطابق حسبة الإشعار مع الفاتورة
+                // نمرر حالة الشمول الضريبي
                 is_inclusive: item.is_inclusive !== undefined ? item.is_inclusive : (inv.is_inclusive || false)
             };
             
-            // إصلاح مشكلة الوحدات: نسخ unit_type من الفاتورة الأصلية
+            // 1. 🔥 نقل الخصم بأي صيغة يرجعها قيود
+            if (item.discount_percent !== undefined) lineItem.discount_percent = String(item.discount_percent);
+            else if (item.discount !== undefined) lineItem.discount = String(item.discount);
+            else lineItem.discount_percent = "0.0";
+
+            // 2. 🔥 الأهم: نقل الضريبة بأي صيغة يرجعها قيود (لحل مشكلة الـ 127 ريال)
+            if (item.tax_id) lineItem.tax_id = String(item.tax_id);
+            if (item.tax_percent !== undefined) lineItem.tax_percent = String(item.tax_percent);
+
+            // 3. إصلاح مشكلة الوحدات
             if (item.unit_type) {
                 lineItem.unit_type = String(item.unit_type);
             } else if (item.unit_type_id) {
@@ -202,6 +207,7 @@ app.post('/api/return', async (req, res) => {
             } else if (item.unit_id) {
                 lineItem.unit_type = String(item.unit_id);
             }
+            
             return lineItem;
         });
 
@@ -211,7 +217,6 @@ app.post('/api/return', async (req, res) => {
             const existingCNs = await qoyodClient.get('/credit_notes');
             const allCNs = existingCNs.data.credit_notes || [];
             if (allCNs.length > 0) {
-                // حساب الرقم التسلسلي التالي بناءً على عدد الإشعارات الموجودة
                 const crnNumbers = allCNs
                     .map(cn => {
                         const match = (cn.reference || '').match(/^CRN(\d+)-/);
@@ -221,7 +226,6 @@ app.post('/api/return', async (req, res) => {
                 if (crnNumbers.length > 0) {
                     crnSequence = Math.max(...crnNumbers) + 1;
                 } else {
-                    // إذا لم تكن هناك إشعارات بصيغة CRN، نبدأ من عدد الإشعارات + 1
                     crnSequence = allCNs.length + 1;
                 }
             }
