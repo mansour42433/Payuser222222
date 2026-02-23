@@ -150,7 +150,7 @@ app.post('/api/pay', async (req, res) => {
     }
 });
 
-// 4. الإرجاع 
+// 4. الإرجاع (المطابق حرفياً للـ API Docs)
 app.post('/api/return', async (req, res) => {
     const { ref, returnType, accountId } = req.body;
 
@@ -164,76 +164,46 @@ app.post('/api/return', async (req, res) => {
         const detailRes = await qoyodClient.get(`/invoices/${summaryInv.id}`);
         const inv = detailRes.data.invoice || summaryInv;
 
-        let targetInventoryId = null;
+        let targetInventoryId = "1";
         if (inv.inventory_id) targetInventoryId = String(inv.inventory_id);
         else if (inv.location_id) targetInventoryId = String(inv.location_id);
         else if (inv.line_items && inv.line_items.length > 0 && inv.line_items[0].inventory_id) {
             targetInventoryId = String(inv.line_items[0].inventory_id);
         }
 
-        if (!targetInventoryId) {
-            return res.json({ status: 'error', message: 'الفاتورة الأصلية لا تحتوي على مستودع (Inventory ID)' });
-        }
-
-        // بناء line_items الشامل
+        // بناء الـ line_items بناءً على التوثيق الرسمي فقط (بدون أي إضافات خارجية)
         const creditLineItems = (inv.line_items || []).map(item => {
             const lineItem = {
                 product_id: item.product_id,
                 description: item.description || "استرجاع",
-                quantity: item.quantity,
-                unit_price: String(item.unit_price), 
-                is_inclusive: item.is_inclusive !== undefined ? item.is_inclusive : (inv.is_inclusive || false)
+                unit_price: String(item.unit_price),
+                quantity: String(item.quantity),
+                tax_percent: item.tax_percent !== undefined ? String(item.tax_percent) : "0.0"
             };
             
-            // الخصم بكافة صيغه
-            if (item.discount_percent !== undefined) lineItem.discount_percent = String(item.discount_percent);
-            else if (item.discount !== undefined) lineItem.discount = String(item.discount);
-            else lineItem.discount_percent = "0.0";
-            
-            if (item.discount_type) lineItem.discount_type = String(item.discount_type);
-
-            // 🔥 الضريبة: إضافة tax_name ضرورية جداً لنظام قيود (هنا كان الخلل في الـ 127)
-            if (item.tax_name) lineItem.tax_name = String(item.tax_name);
-            if (item.tax_id) lineItem.tax_id = String(item.tax_id);
-            if (item.tax_percent !== undefined) lineItem.tax_percent = String(item.tax_percent);
-
-            // الوحدات
             if (item.unit_type) {
                 lineItem.unit_type = String(item.unit_type);
-            } else if (item.unit_type_id) {
-                lineItem.unit_type = String(item.unit_type_id);
-            } else if (item.unit_id) {
-                lineItem.unit_type = String(item.unit_id);
             }
-            
+
+            // التعامل مع الخصم بناءً على التوثيق (مبلغ أو نسبة)
+            const dAmount = parseFloat(item.discount_amount || "0");
+            if (dAmount > 0) {
+                lineItem.discount = String(item.discount_amount);
+                lineItem.discount_type = "amount";
+            } else {
+                lineItem.discount = String(item.discount_percent || "0.0");
+                lineItem.discount_type = "percentage";
+            }
+
             return lineItem;
         });
 
-        // تسلسل الرقم المرجعي
-        let crnSequence = 1;
-        try {
-            const existingCNs = await qoyodClient.get('/credit_notes');
-            const allCNs = existingCNs.data.credit_notes || [];
-            if (allCNs.length > 0) {
-                const crnNumbers = allCNs
-                    .map(cn => {
-                        const match = (cn.reference || '').match(/^CRN(\d+)-/);
-                        return match ? parseInt(match[1]) : 0;
-                    })
-                    .filter(n => n > 0);
-                if (crnNumbers.length > 0) {
-                    crnSequence = Math.max(...crnNumbers) + 1;
-                } else {
-                    crnSequence = allCNs.length + 1;
-                }
-            }
-        } catch (e) {
-            crnSequence = Date.now().toString().slice(-4);
-        }
-
+        // توليد الرقم المرجعي للإشعار
+        let crnSequence = Date.now().toString().slice(-4);
         const uniqueRef = `CRN${crnSequence}-${inv.reference}`;
         const todayDate = new Date(new Date().getTime() + (3 * 60 * 60 * 1000)).toISOString().split('T')[0];
         
+        // إرسال البيانات المعتمدة في التوثيق فقط
         const cnPayload = {
             credit_note: {
                 contact_id: inv.contact_id,
@@ -241,25 +211,25 @@ app.post('/api/return', async (req, res) => {
                 issue_date: todayDate,
                 status: "Approved",
                 inventory_id: targetInventoryId,
-                parent_id: inv.id,
                 line_items: creditLineItems
             }
         };
-
-        console.log("Credit Note Payload:", JSON.stringify(cnPayload, null, 2));
 
         const resCN = await qoyodClient.post('/credit_notes', cnPayload);
         const creditNote = resCN.data.credit_note || resCN.data.note || resCN.data;
         const cnId = creditNote.id;
         
-        const allocAmount = String(parseFloat(inv.due_amount).toFixed(2));
+        // أخذ الإجمالي الذي حسبه قيود بناءً على البارامترات
+        const cnTotal = creditNote.total_amount || creditNote.total;
+        const allocAmount = String(cnTotal);
 
         if (!cnId) {
-            return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن - لم يتم الحصول على ID', details: resCN.data });
+            return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن', details: resCN.data });
         }
 
         if (returnType === 'refund') {
             try {
+                // إنشاء سند صرف لإرجاع الأموال (kind: paid)
                 const receiptRes = await qoyodClient.post('receipts', {
                     receipt: {
                         reference: `REFUND-${uniqueRef}`,
@@ -271,16 +241,18 @@ app.post('/api/return', async (req, res) => {
                     }
                 });
                 const receipt = receiptRes.data.receipt;
+                // تخصيص السند للإشعار الدائن لإغلاقه
                 await qoyodClient.post(`receipts/${receipt.id}/allocations`, {
                     allocation: { allocatee_type: 'CreditNote', allocatee_id: String(cnId), amount: allocAmount }
                 });
                 return res.json({ status: 'success', message: `تم الإرجاع + استرداد نقدي ✅ | المرجع: ${uniqueRef}` });
             } catch (e) {
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل إرجاع الأموال`, details: e.response?.data });
+                return res.json({ status: 'partial', message: `تم إنشاء الإشعار ${uniqueRef} لكن فشل استرداد الأموال`, details: e.response?.data });
             }
         } else {
             try {
-                const allocRes = await qoyodClient.post(`invoices/${inv.id}/allocations`, {
+                // تخصيص الإشعار الدائن للفاتورة بحسب توثيق قيود
+                await qoyodClient.post(`invoices/${inv.id}/allocations`, {
                     invoice: {
                         allocations_attributes: [{
                             source_type: 'CreditNote',
@@ -292,7 +264,7 @@ app.post('/api/return', async (req, res) => {
                 });
                 return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
             } catch (e) {
-                return res.json({ status: 'partial', message: `تم إنشاء إشعار الدائن ${uniqueRef} لكن فشل التخصيص`, details: e.response?.data });
+                return res.json({ status: 'partial', message: `تم إنشاء الإشعار ${uniqueRef} لكن فشل التخصيص`, details: e.response?.data });
             }
         }
 
