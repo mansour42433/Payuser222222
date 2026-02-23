@@ -106,7 +106,13 @@
                 <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm mb-6">
                     <div class="flex flex-col md:flex-row gap-4 items-start">
                         <div class="flex-1 w-full">
-                            <label class="block font-bold text-gray-700 mb-2">أرقام الفواتير</label>
+                            <div class="flex justify-between items-center mb-2">
+                                <label class="block font-bold text-gray-700">أرقام الفواتير</label>
+                                <div class="flex items-center gap-3">
+                                    <button onclick="navigator.clipboard.readText().then(t=>{document.getElementById('advInputList').value=t.trim()})" class="text-blue-400 hover:text-blue-600 transition text-xs flex items-center gap-1 font-bold">📋 لصق</button>
+                                    <button onclick="document.getElementById('advInputList').value=\'\'" class="text-gray-400 hover:text-red-500 transition text-xs flex items-center gap-1 font-bold">🗑️ مسح</button>
+                                </div>
+                            </div>
                             <textarea id="advInputList" class="w-full h-24 p-4 border rounded-xl font-mono focus:ring-2 focus:ring-blue-500 outline-none" placeholder="ضع الأرقام هنا..."></textarea>
                         </div>
                         <button onclick="fetchDetails()" class="md:h-24 md:w-40 w-full bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-md transition flex flex-col items-center justify-center gap-2">
@@ -116,6 +122,11 @@
                     </div>
                 </div>
 
+                <div class="flex gap-2 mb-3">
+                    <button onclick="filterAdvTable('all')" id="filterAll" class="filter-btn active-filter px-4 py-1.5 rounded-full text-sm font-bold bg-blue-600 text-white transition">الكل</button>
+                    <button onclick="filterAdvTable('unpaid')" id="filterUnpaid" class="filter-btn px-4 py-1.5 rounded-full text-sm font-bold bg-white border border-gray-300 text-gray-600 hover:border-blue-400 transition">غير مدفوعة فقط</button>
+                    <button onclick="filterAdvTable('paid')" id="filterPaid" class="filter-btn px-4 py-1.5 rounded-full text-sm font-bold bg-white border border-gray-300 text-gray-600 hover:border-green-400 transition">مدفوعة فقط</button>
+                </div>
                 <div class="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden mb-6">
                     <div class="overflow-x-auto">
                         <table class="w-full text-right custom-table">
@@ -149,6 +160,14 @@
                         <button onclick="startPaymentAdvanced()" id="btnPayAdv" class="bg-gradient-to-r from-green-600 to-green-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:shadow-green-200 transition flex items-center gap-2 text-lg">💸 تأكيد وتنفيذ الدفع</button>
                     </div>
                 </div>
+                <!-- سجل العمليات -->
+                <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-4" id="historySection" style="display:none">
+                    <div class="flex justify-between items-center p-4 border-b">
+                        <h4 class="font-bold text-gray-700">📋 سجل آخر العمليات</h4>
+                        <button onclick="clearHistory()" class="text-xs text-red-400 hover:text-red-600 font-bold">🗑️ مسح السجل</button>
+                    </div>
+                    <div id="historyList" class="divide-y divide-gray-100 max-h-48 overflow-y-auto"></div>
+                </div>
             </div>
 
             <!-- Tab 3: Returns -->
@@ -177,10 +196,21 @@
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-2">نوع الإرجاع المالي</label>
-                            <select id="returnType" class="w-full p-3 border rounded-lg font-bold bg-white focus:ring-2 focus:ring-blue-500 outline-none" onchange="toggleAccountSelect()">
-                                <option value="refund">💰 استرداد نقدي (إخراج مال للعميل)</option>
-                                <option value="credit">📉 تخصيص (خصم من رصيد الفاتورة)</option>
-                            </select>
+                            <div class="grid grid-cols-2 gap-3">
+                                <button type="button" id="btnRefund" onclick="setReturnType('refund')"
+                                    class="p-3 rounded-xl border-2 border-green-500 bg-green-50 text-green-800 font-bold text-sm flex flex-col items-center gap-1 transition">
+                                    <span class="text-xl">💰</span>
+                                    <span>استرداد نقدي</span>
+                                    <span class="text-xs font-normal text-green-600">إخراج مال للعميل</span>
+                                </button>
+                                <button type="button" id="btnCredit" onclick="setReturnType('credit')"
+                                    class="p-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-gray-400 font-bold text-sm flex flex-col items-center gap-1 transition">
+                                    <span class="text-xl">📉</span>
+                                    <span>تخصيص</span>
+                                    <span class="text-xs font-normal">خصم من رصيد الفاتورة</span>
+                                </button>
+                            </div>
+                            <input type="hidden" id="returnType" value="refund">
                             <p class="text-xs text-gray-500 mt-2 flex items-center gap-1">
                                 <span id="returnHintBadge" class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
                                 <span id="returnHint">سيتم إنشاء سند صرف من الحساب المختار.</span>
@@ -345,7 +375,7 @@
                 }
 
                 tbody.innerHTML += `
-                    <tr class="${rowClass} border-b border-gray-100 transition hover:bg-blue-50/30">
+                    <tr class="${rowClass} border-b border-gray-100 transition hover:bg-blue-50/30" data-status="${isPaid?'paid':'unpaid'}">
                         <td class="p-4 text-center"><input type="checkbox" class="chk-row w-5 h-5 accent-blue-600" data-idx="${i}" ${isPaid?'disabled':'checked'} onchange="updateTotalAmount()"></td>
                         <td class="p-4 font-mono font-bold text-gray-700">${d.ref}</td>
                         <td class="p-4 font-bold text-gray-800">${d.contact}</td>
@@ -435,8 +465,7 @@
 
                 if(d.status === 'found') {
                     const isPaid = (d.inv_status === 'Paid');
-                    document.getElementById("returnType").value = isPaid ? 'refund' : 'credit';
-                    toggleAccountSelect();
+                    setReturnType(isPaid ? 'refund' : 'credit');
                     statusBox.innerHTML = `
                         <div class="flex justify-between items-center mb-2 border-b pb-2">
                             <span class="text-sm text-gray-500">العميل</span>
@@ -501,13 +530,94 @@
                 const res = await secureFetch('/api/return', { method: 'POST', body: JSON.stringify({ ref, returnType: type, accountId: acc }) });
                 const data = await res.json();
                 if(data.status === 'success') {
-                    log.innerHTML = `<div class="p-4 bg-green-50 text-green-800 rounded-xl border border-green-200 flex items-center gap-3 animate-fade-in"><span class="text-2xl">✅</span><div><h4 class="font-bold">تمت العملية بنجاح</h4><p class="text-sm">${data.message}</p></div></div>`;
+                    const cnMatch = data.message.match(/CRN[\w\-]+/);
+                    const cnRef = cnMatch ? cnMatch[0] : '';
+                    log.innerHTML = `
+                        <div class="p-4 bg-green-50 border border-green-200 rounded-xl">
+                            <div class="flex items-center gap-3 mb-3">
+                                <span class="text-3xl">✅</span>
+                                <div><h4 class="font-bold text-green-800">تمت العملية بنجاح</h4><p class="text-sm text-green-700">${data.message}</p></div>
+                            </div>
+                            ${cnRef ? `<div class="bg-white border border-green-300 rounded-lg p-3 flex justify-between items-center">
+                                <span class="text-sm text-gray-500">رقم إشعار الدائن</span>
+                                <div class="flex items-center gap-2">
+                                    <b class="font-mono text-green-800 text-lg">${cnRef}</b>
+                                    <button onclick="navigator.clipboard.writeText('${cnRef}');this.innerText='✅';setTimeout(()=>this.innerText='نسخ',1500)" class="text-xs bg-green-100 hover:bg-green-200 text-green-700 px-2 py-1 rounded transition">نسخ</button>
+                                </div>
+                            </div>` : ''}
+                        </div>`;
+                    saveToHistory({ref, type, cnRef, status:'success', time: new Date().toLocaleString('ar-SA')});
                 } else {
-                    log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200"><h4 class="font-bold flex items-center gap-2">❌ فشل الإرجاع</h4><p class="text-sm mt-1">${data.message || 'خطأ غير معروف'}</p><pre class="text-xs mt-2 bg-red-100 p-2 rounded overflow-auto" dir="ltr">${JSON.stringify(data.details, null, 2)}</pre></div>`;
+                    log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200"><h4 class="font-bold flex items-center gap-2">❌ فشل الإرجاع</h4><p class="text-sm mt-1">${data.message || 'خطأ غير معروف'}</p></div>`;
+                    saveToHistory({ref, type, cnRef:'', status:'fail', time: new Date().toLocaleString('ar-SA')});
                 }
             } catch(e) { log.innerHTML = `<div class="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200">❌ خطأ في الاتصال</div>`; }
             btn.disabled = false; btn.innerText = "🚀 تنفيذ الإرجاع الكامل";
         }
+
+        function setReturnType(type) {
+            document.getElementById('returnType').value = type;
+            const btnR = document.getElementById('btnRefund');
+            const btnC = document.getElementById('btnCredit');
+            if(type === 'refund') {
+                btnR.className = btnR.className.replace('border-gray-200 bg-gray-50 text-gray-400','border-green-500 bg-green-50 text-green-800');
+                btnC.className = btnC.className.replace('border-blue-500 bg-blue-50 text-blue-800','border-gray-200 bg-gray-50 text-gray-400');
+            } else {
+                btnC.className = btnC.className.replace('border-gray-200 bg-gray-50 text-gray-400','border-blue-500 bg-blue-50 text-blue-800');
+                btnR.className = btnR.className.replace('border-green-500 bg-green-50 text-green-800','border-gray-200 bg-gray-50 text-gray-400');
+            }
+            toggleAccountSelect();
+        }
+
+        // فلتر الجدول
+        let currentFilter = 'all';
+        function filterAdvTable(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(b => {
+                b.className = b.className.replace('bg-blue-600 text-white','bg-white border border-gray-300 text-gray-600');
+            });
+            const active = document.getElementById('filter' + filter.charAt(0).toUpperCase() + filter.slice(1));
+            if(active) active.className = active.className.replace('bg-white border border-gray-300 text-gray-600','bg-blue-600 text-white');
+            document.querySelectorAll('#advTableBody tr[data-status]').forEach(row => {
+                const s = row.dataset.status;
+                if(filter === 'all') row.style.display = '';
+                else if(filter === 'unpaid') row.style.display = s === 'unpaid' ? '' : 'none';
+                else if(filter === 'paid') row.style.display = s === 'paid' ? '' : 'none';
+            });
+        }
+
+        // سجل العمليات
+        function saveToHistory(entry) {
+            let hist = JSON.parse(localStorage.getItem('returnHistory') || '[]');
+            hist.unshift(entry);
+            if(hist.length > 20) hist = hist.slice(0, 20);
+            localStorage.setItem('returnHistory', JSON.stringify(hist));
+            renderHistory();
+        }
+        function renderHistory() {
+            const hist = JSON.parse(localStorage.getItem('returnHistory') || '[]');
+            const sec = document.getElementById('historySection');
+            const list = document.getElementById('historyList');
+            if(hist.length === 0) { sec.style.display='none'; return; }
+            sec.style.display = 'block';
+            list.innerHTML = hist.map(h => `
+                <div class="flex justify-between items-center p-3 text-sm">
+                    <div class="flex items-center gap-2">
+                        <span>${h.status==='success'?'✅':'❌'}</span>
+                        <span class="font-mono font-bold text-gray-700">${h.ref}</span>
+                        <span class="text-gray-400 text-xs">${h.type==='refund'?'استرداد':'تخصيص'}</span>
+                        ${h.cnRef ? `<span class="font-mono text-green-700 text-xs bg-green-50 px-2 py-0.5 rounded">${h.cnRef}</span>` : ''}
+                    </div>
+                    <span class="text-gray-400 text-xs">${h.time}</span>
+                </div>`).join('');
+        }
+        function clearHistory() {
+            localStorage.removeItem('returnHistory');
+            renderHistory();
+        }
+        // تحميل السجل عند الفتح
+        renderHistory();
+
     </script>
 </body>
 </html>
