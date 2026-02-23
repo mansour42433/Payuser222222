@@ -150,7 +150,7 @@ app.post('/api/pay', async (req, res) => {
     }
 });
 
-// 4. الإرجاع (مع خوارزمية تجاوز فرق الهللات 0.01)
+// 4. الإرجاع (مع تقنية تسوية الهللات المتبقية Fallback)
 app.post('/api/return', async (req, res) => {
     const { ref, returnType, accountId } = req.body;
 
@@ -171,7 +171,6 @@ app.post('/api/return', async (req, res) => {
             targetInventoryId = String(inv.line_items[0].inventory_id);
         }
 
-        // بناء line_items بالاعتماد على الهندسة العكسية للأسعار
         const creditLineItems = (inv.line_items || []).map(item => {
             const lineItem = {
                 product_id: item.product_id,
@@ -191,24 +190,19 @@ app.post('/api/return', async (req, res) => {
                 lineItem.discount_type = "percentage";
             }
 
-            // 💡 الخوارزمية الرياضية لإجبار قيود على التطابق بالهللة
+            // محاولة حساب السعر الأساسي للتقليل من فرق الهللة قدر المستطاع
             const lineTotal = parseFloat(item.line_total || "0");
             const taxP = parseFloat(item.tax_percent || "0");
             const qty = parseFloat(item.quantity || "1");
 
             if (lineTotal > 0 && qty > 0) {
-                // 1. نزيل الضريبة
                 let basePrice = lineTotal / (1 + (taxP / 100));
-                
-                // 2. نرد الخصم
                 if (lineItem.discount_type === 'amount') {
                     basePrice += parseFloat(lineItem.discount);
                 } else if (lineItem.discount_type === 'percentage') {
                     const discP = parseFloat(lineItem.discount);
                     if (discP < 100) basePrice = basePrice / (1 - (discP / 100));
                 }
-                
-                // 3. نحسب السعر للوحدة الواحدة بـ 4 منازل عشرية دقيقة جداً
                 const preciseUnitPrice = basePrice / qty;
                 lineItem.unit_price = preciseUnitPrice.toFixed(4); 
             } else {
@@ -233,11 +227,17 @@ app.post('/api/return', async (req, res) => {
             }
         };
 
+        // 1. إنشاء الإشعار الدائن
         const resCN = await qoyodClient.post('/credit_notes', cnPayload);
         const creditNote = resCN.data.credit_note || resCN.data.note || resCN.data;
         const cnId = creditNote.id;
         
-        const allocAmount = String(parseFloat(inv.due_amount).toFixed(2));
+        // جلب الإجمالي الفعلي الذي حسبه قيود (مثل 974.99)
+        const cnTotalNum = parseFloat(creditNote.total_amount || creditNote.total);
+        const invDueNum = parseFloat(inv.due_amount);
+        
+        // سنخصص المبلغ الموجود في الإشعار الدائن بالضبط
+        const allocAmount = String(cnTotalNum);
 
         if (!cnId) {
             return res.json({ status: 'error', message: 'فشل إنشاء إشعار الدائن', details: resCN.data });
@@ -245,6 +245,7 @@ app.post('/api/return', async (req, res) => {
 
         if (returnType === 'refund') {
             try {
+                // استرداد نقدي
                 const receiptRes = await qoyodClient.post('receipts', {
                     receipt: {
                         reference: `REFUND-${uniqueRef}`,
@@ -265,6 +266,7 @@ app.post('/api/return', async (req, res) => {
             }
         } else {
             try {
+                // 2. تخصيص الإشعار الدائن للفاتورة
                 await qoyodClient.post(`invoices/${inv.id}/allocations`, {
                     invoice: {
                         allocations_attributes: [{
@@ -275,7 +277,42 @@ app.post('/api/return', async (req, res) => {
                         }]
                     }
                 });
-                return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}` });
+
+                // 3. 🎯 الـ FALLBACK: تسوية فرق الهللات لإغلاق الفاتورة (إذا كان الفرق بين 0.01 و 0.50)
+                const gap = invDueNum - cnTotalNum;
+                let fallbackMsg = '';
+                
+                if (gap > 0 && gap <= 0.50) {
+                    try {
+                        // إنشاء سند قبض لتغطية فرق التقريب
+                        const gapReceiptRes = await qoyodClient.post('receipts', {
+                            receipt: {
+                                reference: `GAP-${uniqueRef}`,
+                                contact_id: inv.contact_id,
+                                account_id: String(accountId),
+                                amount: String(gap.toFixed(2)),
+                                date: todayDate,
+                                kind: 'received',
+                                description: 'تسوية تقريب جبرية لإغلاق الفاتورة'
+                            }
+                        });
+                        const gapReceipt = gapReceiptRes.data.receipt;
+                        
+                        // تخصيص سند القبض للفاتورة
+                        await qoyodClient.post(`receipts/${gapReceipt.id}/allocations`, {
+                            allocation: {
+                                allocatee_type: 'Invoice',
+                                allocatee_id: String(inv.id),
+                                amount: String(gap.toFixed(2))
+                            }
+                        });
+                        fallbackMsg = ` (تمت تسوية الهللة تلقائياً لإغلاق الفاتورة)`;
+                    } catch (fallbackErr) {
+                        console.error("Fallback Gap Error:", fallbackErr.message);
+                    }
+                }
+
+                return res.json({ status: 'success', message: `تم الإرجاع + تخصيص إشعار الدائن للفاتورة ✅ | المرجع: ${uniqueRef}${fallbackMsg}` });
             } catch (e) {
                 return res.json({ status: 'partial', message: `تم إنشاء الإشعار ${uniqueRef} لكن فشل التخصيص`, details: e.response?.data });
             }
