@@ -79,7 +79,6 @@
                 </div>
             </div>
 
-            <!-- Tab 1: WhatsApp Filter (Replaced Quick Payment) -->
             <div id="view-whatsapp" class="block space-y-6 animate-fade-in">
                 <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm whatsapp-container">
                     <h2 class="whatsapp-h2">استخراج الأرقام من الواتساب</h2>
@@ -101,7 +100,6 @@
                 </div>
             </div>
 
-            <!-- Tab 2: Advanced Payment (Copied and Modified) -->
             <div id="view-advanced" class="hidden animate-fade-in">
                 <div class="bg-white p-5 rounded-xl border border-gray-200 shadow-sm mb-6">
                     <div class="flex flex-col md:flex-row gap-4 items-start">
@@ -110,7 +108,7 @@
                                 <label class="block font-bold text-gray-700">أرقام الفواتير</label>
                                 <div class="flex items-center gap-3">
                                     <button onclick="navigator.clipboard.readText().then(t=>{document.getElementById('advInputList').value=t.trim()})" class="text-blue-400 hover:text-blue-600 transition text-xs flex items-center gap-1 font-bold">📋 لصق</button>
-                                    <button onclick="document.getElementById('advInputList').value=\'\'" class="text-gray-400 hover:text-red-500 transition text-xs flex items-center gap-1 font-bold">🗑️ مسح</button>
+                                    <button onclick="document.getElementById('advInputList').value=''" class="text-gray-400 hover:text-red-500 transition text-xs flex items-center gap-1 font-bold">🗑️ مسح</button>
                                 </div>
                             </div>
                             <textarea id="advInputList" class="w-full h-24 p-4 border rounded-xl font-mono focus:ring-2 focus:ring-blue-500 outline-none" placeholder="ضع الأرقام هنا..."></textarea>
@@ -160,7 +158,6 @@
                         <button onclick="startPaymentAdvanced()" id="btnPayAdv" class="bg-gradient-to-r from-green-600 to-green-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:shadow-green-200 transition flex items-center gap-2 text-lg">💸 تأكيد وتنفيذ الدفع</button>
                     </div>
                 </div>
-                <!-- سجل العمليات -->
                 <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-4" id="historySection" style="display:none">
                     <div class="flex justify-between items-center p-4 border-b">
                         <h4 class="font-bold text-gray-700">📋 سجل آخر العمليات</h4>
@@ -170,7 +167,6 @@
                 </div>
             </div>
 
-            <!-- Tab 3: Returns -->
             <div id="view-returns" class="hidden animate-fade-in">
                 <div class="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-6 flex items-start gap-3">
                     <span class="text-2xl">ℹ️</span>
@@ -196,24 +192,23 @@
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-2">نوع الإرجاع المالي</label>
-                            <div class="grid grid-cols-2 gap-3">
-                                <button type="button" id="btnRefund" onclick="setReturnType('refund')"
-                                    class="p-3 rounded-xl border-2 border-green-500 bg-green-50 text-green-800 font-bold text-sm flex flex-col items-center gap-1 transition">
-                                    <span class="text-xl">💰</span>
-                                    <span>استرداد نقدي</span>
-                                    <span class="text-xs font-normal text-green-600">إخراج مال للعميل</span>
-                                </button>
-                                <button type="button" id="btnCredit" onclick="setReturnType('credit')"
-                                    class="p-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-gray-400 font-bold text-sm flex flex-col items-center gap-1 transition">
-                                    <span class="text-xl">📉</span>
-                                    <span>تخصيص</span>
-                                    <span class="text-xs font-normal">خصم من رصيد الفاتورة</span>
-                                </button>
+                            
+                            <div class="flex gap-4">
+                                <label class="flex items-center justify-center gap-2 cursor-pointer bg-blue-50 text-blue-800 p-3 rounded-xl border border-blue-200 shadow-sm hover:border-blue-500 transition-colors w-full">
+                                    <input type="radio" name="returnTypeRadio" value="credit" checked onchange="setReturnType('credit')" class="w-5 h-5 text-blue-600">
+                                    <span class="font-bold text-sm">تخصيص (موافق عليها)</span>
+                                </label>
+                                
+                                <label class="flex items-center justify-center gap-2 cursor-pointer bg-white text-gray-600 p-3 rounded-xl border shadow-sm hover:border-green-500 transition-colors w-full">
+                                    <input type="radio" name="returnTypeRadio" value="refund" onchange="setReturnType('refund')" class="w-5 h-5 text-green-600">
+                                    <span class="font-bold text-sm">استرداد نقدي</span>
+                                </label>
                             </div>
-                            <input type="hidden" id="returnType" value="refund">
-                            <p class="text-xs text-gray-500 mt-2 flex items-center gap-1">
-                                <span id="returnHintBadge" class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
-                                <span id="returnHint">سيتم إنشاء سند صرف من الحساب المختار.</span>
+                            
+                            <input type="hidden" id="returnType" value="credit">
+                            <p class="text-xs text-gray-500 mt-3 flex items-center gap-1">
+                                <span id="returnHintBadge" class="w-2 h-2 rounded-full bg-orange-500 inline-block"></span>
+                                <span id="returnHint">سيتم خفض المبلغ المستحق على الفاتورة (لن يخرج مال).</span>
                             </p>
                         </div>
                     </div>
@@ -278,6 +273,18 @@
                     const opt = document.createElement("option");
                     opt.value = a.id; opt.text = a.name; sel.appendChild(opt);
                 });
+
+                // 💡 التعديل الجديد: استرجاع الحساب الافتراضي من المتصفح
+                const savedDefaultAccount = localStorage.getItem('defaultPayAccount');
+                if (savedDefaultAccount) {
+                    sel.value = savedDefaultAccount;
+                }
+
+                // 💡 التعديل الجديد: حفظ الحساب كافتراضي فوراً بمجرد أن يغيره المستخدم
+                sel.addEventListener('change', (e) => {
+                    localStorage.setItem('defaultPayAccount', e.target.value);
+                });
+
             } catch(e){}
         }
 
@@ -555,17 +562,19 @@
             btn.disabled = false; btn.innerText = "🚀 تنفيذ الإرجاع الكامل";
         }
 
+        // 💡 التعديل الجديد لعمل الأزرار كـ Radio Buttons 
         function setReturnType(type) {
             document.getElementById('returnType').value = type;
-            const btnR = document.getElementById('btnRefund');
-            const btnC = document.getElementById('btnCredit');
-            if(type === 'refund') {
-                btnR.className = btnR.className.replace('border-gray-200 bg-gray-50 text-gray-400','border-green-500 bg-green-50 text-green-800');
-                btnC.className = btnC.className.replace('border-blue-500 bg-blue-50 text-blue-800','border-gray-200 bg-gray-50 text-gray-400');
-            } else {
-                btnC.className = btnC.className.replace('border-gray-200 bg-gray-50 text-gray-400','border-blue-500 bg-blue-50 text-blue-800');
-                btnR.className = btnR.className.replace('border-green-500 bg-green-50 text-green-800','border-gray-200 bg-gray-50 text-gray-400');
-            }
+            const radios = document.getElementsByName('returnTypeRadio');
+            radios.forEach(radio => {
+                if(radio.value === type) {
+                    radio.checked = true;
+                    // تغيير ألوان الخلفية لتمييز الخيار النشط
+                    radio.parentElement.className = radio.parentElement.className.replace('bg-white text-gray-600', 'bg-blue-50 text-blue-800 border-blue-200');
+                } else {
+                    radio.parentElement.className = radio.parentElement.className.replace('bg-blue-50 text-blue-800 border-blue-200', 'bg-white text-gray-600');
+                }
+            });
             toggleAccountSelect();
         }
 
